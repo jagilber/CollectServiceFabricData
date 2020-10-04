@@ -38,7 +38,7 @@ there is currently a bug with powershell core and azure authentication cmdlets u
 ```
 
 ## Creating pull requests
-
+todo
 ## Creating Releases
 
 To create a release, merge into master from same repo (microsoft/CollectServiceFabricData) and add 'Release' label before merge.
