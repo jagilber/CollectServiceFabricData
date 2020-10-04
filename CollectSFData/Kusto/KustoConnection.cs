@@ -3,6 +3,8 @@
 // Licensed under the MIT License (MIT). See License.txt in the repo root for license information.
 // ------------------------------------------------------------
 
+using CollectSFData.Common;
+using CollectSFData.DataFile;
 using Microsoft.Azure.Storage;
 using Microsoft.Azure.Storage.Blob;
 using Microsoft.Azure.Storage.Queue;
@@ -15,12 +17,12 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace CollectSFData
+namespace CollectSFData.Kusto
 {
     public class KustoConnection : Instance
     {
         private const int _maxMessageCount = 32;
-        private static readonly CustomTaskManager _kustoTasks = new CustomTaskManager(true);
+        private readonly CustomTaskManager _kustoTasks = new CustomTaskManager(true);
         private readonly SynchronizedList<string> _messageList = new SynchronizedList<string>();
         private readonly TimeSpan _messageTimeToLive = new TimeSpan(0, 1, 0, 0);
         private readonly CancellationTokenSource _tokenSource = new CancellationTokenSource();
@@ -64,7 +66,7 @@ namespace CollectSFData
                 _tokenSource.Cancel();
                 _monitorTask.Wait();
                 _monitorTask.Dispose();
-                InjestResourceIdKustoTableMapping();
+                IngestResourceIdKustoTableMapping();
 
                 if (_failureCount > 0)
                 {
@@ -377,18 +379,18 @@ namespace CollectSFData
             Log.Info($"current count ingested: {_ingestedUris.Count()} ingesting: {_messageList.Count()} failed: {_failureCount} total: {_ingestedUris.Count() + _messageList.Count() + _failureCount}", ConsoleColor.Green);
         }
 
-        private void InjestResourceIdKustoTableMapping()
+        private void IngestResourceIdKustoTableMapping()
         {
-            if (Config.FileType == FileTypesEnum.trace)
+            if (_ingestedUris.Any() && Config.FileType == FileTypesEnum.trace)
             {
-                // Fetch resource ID from injested traces
+                // Fetch resource ID from ingested traces
                 var results = Endpoint.Query($"['{Endpoint.TableName}']" +
                     $" | where Type == 'InfrastructureService.RestClientHelper'" +
                     $" | take 1");
 
                 if (results.Any())
                 {
-                    Regex pattern = new Regex(@"''resourceId'': ''(/[A-Za-z0-9./-]+)''");
+                    Regex pattern = new Regex(@"resourceId\W+?(/[A-Za-z0-9./-]+)");
                     Match match = pattern.Match(results.FirstOrDefault());
                     Config.ResourceUri = match.Groups[1].Value;
                     Log.Info($"ResourceID: {Config.ResourceUri}");

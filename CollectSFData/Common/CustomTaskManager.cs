@@ -9,14 +9,14 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace CollectSFData
+namespace CollectSFData.Common
 {
     public class CustomTaskManager : Instance
     {
-        private static readonly SynchronizedList<CustomTaskManager> _allInstances = new SynchronizedList<CustomTaskManager>();
-        private static readonly CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
+        private static SynchronizedList<CustomTaskManager> _allInstances = new SynchronizedList<CustomTaskManager>();
+        private static CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
         private static readonly Task _taskMonitor = new Task(TaskMonitor);
-        private readonly CustomTaskScheduler _customScheduler = new CustomTaskScheduler(Config);
+        private static CustomTaskScheduler _customScheduler; // init in constructor after starting _taskMonitor to avoid exception
         private string CallerName;
 
         static CustomTaskManager()
@@ -27,13 +27,20 @@ namespace CollectSFData
         {
             RemoveWhenComplete = removeWhenComplete;
             CallerName = callerName;
-            Log.Info($"adding task instance for:{CallerName}", ConsoleColor.White);
-            _allInstances.Add(this);
 
-            if (_taskMonitor.Status == TaskStatus.Created)
+            lock (_taskMonitor)
             {
-                _taskMonitor.Start();
+                if (_taskMonitor.Status == TaskStatus.Created)
+                {
+                    _taskMonitor.Start();
+                    _customScheduler = new CustomTaskScheduler(Config);
+
+                    Log.Info($"starting taskmonitor. status: {_taskMonitor.Status}", ConsoleColor.White);
+                }
             }
+
+            Log.Info($"adding task instance for:{CallerName} taskmonitor status: {_taskMonitor.Status}", ConsoleColor.White);
+            _allInstances.Add(this);
         }
 
         public SynchronizedList<Task> AllTasks { get; set; } = new SynchronizedList<Task>();
@@ -177,8 +184,19 @@ namespace CollectSFData
 
         private Task AddToQueue(TaskObject taskObject, bool taskWait = false)
         {
+            int workerThreads = 0;
+            int completionPortThreads = 0;
+            int count = 0;
+
+            while (taskWait && workerThreads < (Config.Threads * MinThreadMultiplier))
+            {
+                ThreadPool.GetAvailableThreads(out workerThreads, out completionPortThreads);
+                Thread.Sleep(ThreadSleepMs10);
+                count++;
+            }
+
             QueuedTaskObjects.Add(taskObject);
-            Log.Debug($"adding new taskobject to queue: {CallerName}");
+            Log.Info($"added new taskobject to queue: {CallerName} throttle ms: {count * 10}");
             TimeSpan delay = new TimeSpan();
 
             if (taskWait)

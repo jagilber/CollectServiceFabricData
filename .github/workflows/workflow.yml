@@ -8,11 +8,14 @@ env:
   github_owner: ${{ github.event.repository.owner.name }}
 
 on:
-  pull_request:
+  pull_request_target:
     types: [closed, opened]
     paths-ignore:
       - "docs/**"
       - "configurationFiles/**"
+      - "KustoFunctions/**"
+      - "KustoQueries/**"
+      - "LogAnalyticsQueries/**"
     branches:
       - master
 jobs:
@@ -62,7 +65,7 @@ jobs:
           path: ${{ env.artifacts_path }}
 
   release:
-    if: success() && github.event.pull_request.merged == true && github.event.action == 'closed' && contains(github.event.pull_request.labels.*.name, 'Release')
+    if: success() && github.event.pull_request.merged == true && github.event.action == 'closed' && (contains(github.event.pull_request.labels.*.name, 'Release') || contains(github.event.pull_request.labels.*.name, 'Pre-release'))
     needs: build
     runs-on: windows-latest
     steps:
@@ -83,11 +86,19 @@ jobs:
         shell: cmd
         run: dir %release_path% /s
 
+      - name: set nuget package
+        shell: powershell
+        run: |
+          $nugetPackage = (get-item "$($env:release_path)\*.nupkg").FullName
+          $nugetPackageName = (get-item "$($env:release_path)\*.nupkg").Name
+          echo "::set-env name=nuget_package::$nugetPackage"
+          echo "::set-env name=nuget_package_name::$nugetPackageName"
+
       - name: nuget push
         shell: cmd
         run: |
           echo #not working needs codesign
-          echo nuget.exe push %artifacts_path%\*.nupkg %nuget_api_key% -Verbosity Detailed -Source https://api.nuget.org/v3/index.json -SkipDuplicate -NonInteractive
+          echo nuget.exe push %nuget_package% %nuget_api_key% -Verbosity Detailed -Source https://api.nuget.org/v3/index.json -SkipDuplicate -NonInteractive
           echo # working in fork, GPR blocked on upstream 
           echo nuget.exe sources add -Name 'GPR' -Verbosity Detailed -Source https://nuget.pkg.github.com/%github_owner%/index.json -NonInteractive -UserName %GITHUB_ACTOR% -Password %GITHUB_TOKEN%
           echo nuget.exe setapikey %nuget_api_key% -Source 'GPR' -Verbosity Detailed -NonInteractive
@@ -123,7 +134,7 @@ jobs:
           tag_name: ${{ env.file_version }}
           release_name: ${{ env.project_name }}
           draft: false
-          prerelease: false
+          prerelease: contains(github.event.pull_request.labels.*.name, 'Pre-release')
 
       - name: upload release asset
         id: upload-release-asset
@@ -135,3 +146,15 @@ jobs:
           asset_path: .\${{ env.release_path }}\${{ env.project_name }}.zip
           asset_name: ${{ env.project_name }}.zip
           asset_content_type: application/zip
+
+      - name: upload nuget release asset
+        id: upload-nuget-release-asset
+        uses: actions/upload-release-asset@v1.0.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ env.nuget_package }}
+          asset_name: ${{ env.nuget_package_name }}
+          asset_content_type: application/zip
+
