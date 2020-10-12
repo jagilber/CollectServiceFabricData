@@ -6,6 +6,7 @@
 using CollectSFData.DataFile;
 using NUnit.Framework;
 using System;
+using System.Diagnostics;
 
 namespace CollectSFDataTests
 {

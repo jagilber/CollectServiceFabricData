@@ -6,6 +6,7 @@
 using CollectSFData.DataFile;
 using NUnit.Framework;
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Text.RegularExpressions;
 
@@ -19,7 +20,7 @@ namespace CollectSFDataTests
         {
             TestUtilities utils = DefaultUtilities();
             string defaultOptionsFile = $"{TestUtilities.WorkingDir}\\collectsfdata.options.json";
-            if (!File.Exists(defaultOptionsFile) & File.Exists(DefaultOptionsFile))
+            if(!File.Exists(defaultOptionsFile) & File.Exists(DefaultOptionsFile))
             {
                 defaultOptionsFile = DefaultOptionsFile;
             }
@@ -29,7 +30,7 @@ namespace CollectSFDataTests
             ProcessOutput results = utils.ExecuteCollectSfData(defaultOptionsFile);
 
             Assert.IsTrue(results.HasErrors(), results.ToString());
-
+            
             // should not start execution
             Assert.NotZero(results.ExitCode);
         }
@@ -110,7 +111,7 @@ namespace CollectSFDataTests
 
             Assert.IsTrue(!results.HasErrors(), results.ToString());
             Assert.IsTrue(File.Exists(utils.TempOptionsFile));
-
+            
             // should start execution
             Assert.Zero(results.ExitCode);
         }

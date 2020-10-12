@@ -20,7 +20,6 @@ namespace CollectSFData.Common
         private static bool _displayingProgress;
         private static ConsoleColor _highlightBackground = Console.ForegroundColor;
         private static ConsoleColor _highlightForeground = Console.BackgroundColor;
-        private static JsonSerializerSettings _jsonSerializerSettings;
         private static SynchronizedList<MessageObject> _lastMessageList = new SynchronizedList<MessageObject>();
         private static string _logFile;
         private static SynchronizedList<MessageObject> _messageList = new SynchronizedList<MessageObject>();
@@ -28,6 +27,8 @@ namespace CollectSFData.Common
         private static Task _taskWriter;
         private static CancellationTokenSource _taskWriterCancellationToken;
         private static int _threadSleepMs = Constants.ThreadSleepMs100;
+        private static event EventHandler<Newtonsoft.Json.Serialization.ErrorEventArgs> JsonErrorHandler;
+        private static JsonSerializerSettings _jsonSerializerSettings;
 
         static Log()
         {
@@ -40,8 +41,12 @@ namespace CollectSFData.Common
 
             Start();
         }
-
-        private static event EventHandler<Newtonsoft.Json.Serialization.ErrorEventArgs> JsonErrorHandler;
+        
+        private static void Log_JsonErrorHandler(object sender, Newtonsoft.Json.Serialization.ErrorEventArgs e)
+        {
+            e.ErrorContext.Handled = true;
+            Info($"json serialization error: {e.ErrorContext.OriginalObject} {e.ErrorContext.Path}");
+        }
 
         public static bool LogDebugEnabled { get; set; }
 
@@ -232,12 +237,6 @@ namespace CollectSFData.Common
                 _streamWriter.Close();
                 _streamWriter = null;
             }
-        }
-
-        private static void Log_JsonErrorHandler(object sender, Newtonsoft.Json.Serialization.ErrorEventArgs e)
-        {
-            e.ErrorContext.Handled = true;
-            Info($"json serialization error: {e.ErrorContext.OriginalObject} {e.ErrorContext.Path}");
         }
 
         private static void ResetColor(ConsoleColor? foregroundColor = null, ConsoleColor? backgroundColor = null)
