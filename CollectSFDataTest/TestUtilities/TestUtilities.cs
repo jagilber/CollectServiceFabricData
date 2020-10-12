@@ -7,7 +7,6 @@
 //https://github.com/nunit/docs/wiki/Tips-And-Tricks
 //https://github.com/nunit/nunit-csharp-samples
 
-using CollectSFData;
 using CollectSFData.Azure;
 using CollectSFData.Common;
 using CollectSFData.DataFile;
@@ -176,9 +175,9 @@ namespace CollectSFDataTests
                 SaveTempOptions();
                 //Program.Config = new ConfigurationOptions();
                 //Program program = new Program();
-                var program = new Mock<Collector>();
+                var program = new Mock<Program>();
                 //Moq.Language.Flow.ISetup<Program, int> result = program.Setup(p => p.Execute(TempArgs));
-                program.Setup(p => p.Collect(TempArgs));
+                program.Setup(p => p.Execute(TempArgs));
 
                 Assert.IsNotNull(program);
 
@@ -242,19 +241,10 @@ namespace CollectSFDataTests
                     Console.Error.WriteLine(errorLine);
                     output.StandardError += errorLine;
                 }
-
             }
 
             output.ExitCode = process.ExitCode;
             return output;
-        }
-
-        private void ProcessExited(object sender, EventArgs e)
-        {
-            //Log.Info($"sender", sender);
-            //Log.Info($"args", e);
-            hasExited = true;
-
         }
 
         public ProcessOutput ExecuteTest()
@@ -267,7 +257,7 @@ namespace CollectSFDataTests
 
                 SaveTempOptions();
                 //Instance.Config = new ConfigurationOptions();
-                Collector program = new Collector();
+                Program program = new Program();
                 Assert.IsNotNull(program);
 
                 StartConsoleRedirection();
@@ -276,7 +266,7 @@ namespace CollectSFDataTests
                 //
                 // populate default collectsfdata.options.json
                 //int result = program.Execute(TempArgs);
-                int result = program.Collect(new string[] { });
+                int result = program.Execute(new string[] { });
                 Log.Info(">>>>test result<<<<", result);
                 ProcessOutput output = StopConsoleRedirection();
 
@@ -421,6 +411,13 @@ namespace CollectSFDataTests
                     Assert.AreEqual(true, endpoints.IsValid());
                 }
             }
+        }
+
+        private void ProcessExited(object sender, EventArgs e)
+        {
+            //Log.Info($"sender", sender);
+            //Log.Info($"args", e);
+            hasExited = true;
         }
     }
 }
