@@ -7,10 +7,10 @@
 @using Microsoft.Extensions.Logging
 @using System.Text.Json
 @using System.Net
+@inject IJSRuntime JSRuntime
 @inject HttpClient Http
 @inject NavigationManager navigationManager
 @inject ILogger<Configuration> logger;
-
 
 <style>
     form .row {
@@ -234,7 +234,7 @@ else
                         />
                     </div>
                     <div class="row justify-content-left">
-                        <RadzenButton ButtonType="ButtonType.Submit" Icon="save" style="margin-left: 20px;" Text="Save" />
+                        <RadzenButton ButtonType="ButtonType.Submit"  Icon="save" style="margin-left: 20px;" Text="Save" />
                     </div>
                     <div class="row justify-content-left">
                         <RadzenButton ButtonStyle="ButtonStyle.Light" Icon="cancel" style="margin-left: 20px;" Text="Cancel"
@@ -494,15 +494,14 @@ else
 //await Task.Delay(10000);
 #endif
 
-        //config = await Http.GetFromJsonAsync<ConfigurationProperties>("api/configurationJson", JsonHelpers.GetJsonSerializerOptions());
-        //tableName = config.KustoTable;
         GatherTypes = Enum.GetNames(typeof(CollectSFData.DataFile.FileTypesEnum)).ToList();
         await GetCurrentConfig();
     }
  
-    void Submit(ConfigurationProperties arg)
+    async void Submit(ConfigurationProperties arg)
     {
-        //
+        string jsonString = JsonSerializer.Serialize(arg, JsonHelpers.GetJsonSerializerOptions(true));
+        await JSRuntime.InvokeAsync<object>("FileSaveAs", "collectsfdata.options.json", jsonString );
     }
 
     async void UpdateConfig(string uploadedJson)
@@ -523,7 +522,7 @@ else
         else
         {
             console.Log($"ERROR:{response.StatusCode}");
-            GetCurrentConfig();
+            await GetCurrentConfig();
         }
     }
 

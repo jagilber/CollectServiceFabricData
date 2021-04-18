@@ -5,16 +5,15 @@ namespace CollectSFDataGui.Shared
 {
     public class JsonHelpers
     {
-        public static JsonSerializerOptions GetJsonSerializerOptions()
+        public static JsonSerializerOptions GetJsonSerializerOptions(bool indented = false)
         {
             JsonSerializerOptions options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
             options.Converters.Add(new JsonHelpers.StringConverter());
             options.AllowTrailingCommas = true;
             options.MaxDepth = 5;
-            //options.IncludeFields = true;
             options.PropertyNameCaseInsensitive = true;
             options.ReadCommentHandling = JsonCommentHandling.Skip;
-            //options.ReferenceHandler = ReferenceHandler.Preserve;
+            options.WriteIndented = indented;
             return options;
         }
 
