@@ -89,12 +89,16 @@ namespace CollectSFData
             }
             finally
             {
-                CustomTaskManager.Cancel();
-                _noProgressTimer?.Dispose();
-                Log.Close();
-
+                Close();
                 CustomTaskManager.Resume();
             }
+        }
+
+        public void Close()
+        {
+            CustomTaskManager.Cancel();
+            _noProgressTimer?.Dispose();
+            Log.Close();
         }
 
         public string DetermineClusterId()
@@ -147,9 +151,8 @@ namespace CollectSFData
             Instance.Initialize(configurationOptions);
             Log.Info($"version: {Config.Version}");
 
-            if (!Config.PopulateConfig())
+            if((Config.NeedsValidation && !Config.Validate()) | !Config.IsValid)
             {
-                Config.SaveConfigFile();
                 return false;
             }
             
