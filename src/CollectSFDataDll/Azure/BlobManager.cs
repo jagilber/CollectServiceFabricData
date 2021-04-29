@@ -17,7 +17,7 @@ using System.Threading.Tasks;
 
 namespace CollectSFData.Azure
 {
-    public class BlobManager : Constants
+    public class BlobManager
     {
         private readonly CustomTaskManager _blobChildTasks = new CustomTaskManager(true) { CreationOptions = TaskCreationOptions.AttachedToParent };
         private readonly CustomTaskManager _blobTasks = new CustomTaskManager(true);
@@ -93,6 +93,34 @@ namespace CollectSFData.Azure
             QueueBlobSegmentDownload(blobItems);
         }
 
+        public void DownloadFiles(string[] uris)
+        {
+            List<IListBlobItem> blobItems = new List<IListBlobItem>();
+
+            foreach (string uri in uris)
+            {
+                try
+                {
+                    if (FileTypes.MapFileUriType(uri) != FileUriTypesEnum.azureStorageUri)
+                    {
+                        Log.Warning($"not blob storage path. skipping:{uri}");
+                        continue;
+                    }
+                    else
+                    {
+                        blobItems.Add(_blobClient.GetBlobReferenceFromServer(new Uri(uri)));
+                    }
+                }
+                catch (Exception e)
+                {
+                    Log.Exception($"{e}");
+                }
+            }
+
+            QueueBlobSegmentDownload(blobItems);
+            uris = blobItems.Select(x => x.Uri.ToString()).ToArray();
+        }
+
         private void AddContainerToList(CloudBlobContainer container)
         {
             if (!ContainerList.Any(x => x.Name.Equals(container.Name)))
@@ -128,34 +156,6 @@ namespace CollectSFData.Azure
             DownloadBlobsFromContainer(container);
         }
 
-        public void DownloadFiles(string[] uris)
-        {
-            List<IListBlobItem> blobItems = new List<IListBlobItem>();
-
-            foreach (string uri in uris)
-            {
-                try
-                {
-                    if(FileTypes.MapFileUriType(uri) != FileUriTypesEnum.azureUri)
-                    {
-                        Log.Warning($"not blob storage path. skipping:{uri}");
-                        continue;
-                    }
-                    else
-                    {
-                        blobItems.Add(_blobClient.GetBlobReferenceFromServer(new Uri(uri)));
-                    }
-                }
-                catch (Exception e)
-                {
-                    Log.Exception($"{e}");
-                }
-            }
-
-            QueueBlobSegmentDownload(blobItems);
-            uris = blobItems.Select(x => x.Uri.ToString()).ToArray();
-        }
-
         private IEnumerable<BlobResultSegment> EnumerateContainerBlobs(CloudBlobContainer cloudBlobContainer)
         {
             Log.Info($"enter {cloudBlobContainer.Uri}");
@@ -169,7 +169,7 @@ namespace CollectSFData.Azure
                     null,
                     false,
                     BlobListingDetails.None,
-                    MaxResults,
+                    Constants.MaxResults,
                     blobToken,
                     null,
                     null).Result as BlobResultSegment).Result as BlobResultSegment;
@@ -291,7 +291,7 @@ namespace CollectSFData.Azure
                 cloudBlobDirectory.ListBlobsSegmentedAsync(
                     false,
                     BlobListingDetails.None,
-                    MaxResults,
+                    Constants.MaxResults,
                     blobToken,
                     null,
                     null).Result as BlobResultSegment).Result as BlobResultSegment;
@@ -318,7 +318,7 @@ namespace CollectSFData.Azure
                     ParallelOperationThreadCount = Config.Threads
                 };
 
-                if (sourceLength > MaxStreamTransmitBytes)
+                if (sourceLength > Constants.MaxStreamTransmitBytes)
                 {
                     fileObject.DownloadAction = () =>
                     {
@@ -352,8 +352,8 @@ namespace CollectSFData.Azure
         {
             int parentId = Thread.CurrentThread.ManagedThreadId;
             Log.Debug($"enter. current id:{parentId}. results count: {blobResults.Count()}");
-            long segmentMinDateTicks = DiscoveredMinDateTicks;
-            long segmentMaxDateTicks = DiscoveredMaxDateTicks;
+            long segmentMinDateTicks = _instance.DiscoveredMinDateTicks;
+            long segmentMaxDateTicks = _instance.DiscoveredMaxDateTicks;
 
             foreach (IListBlobItem blob in blobResults)
             {
@@ -453,7 +453,7 @@ namespace CollectSFData.Azure
                             LastModified = lastModified,
                             Status = FileStatus.enumerated
                         };
-                        
+
                         _instance.FileObjects.Add(fileObject);
 
                         Log.Info($"queueing blob with timestamp: {lastModified}\r\n file: {blob.Uri.AbsolutePath}");
@@ -485,7 +485,7 @@ namespace CollectSFData.Azure
                     Log.Debug($"set new discovered min time range ticks: {new DateTime(ticks).ToString("o")}");
                     lock (_dateTimeMinLock)
                     {
-                        segmentMinDateTicks = DiscoveredMinDateTicks = Math.Min(DiscoveredMinDateTicks, ticks);
+                        segmentMinDateTicks = _instance.DiscoveredMinDateTicks = Math.Min(_instance.DiscoveredMinDateTicks, ticks);
                     }
                 }
 
@@ -494,7 +494,7 @@ namespace CollectSFData.Azure
                     Log.Debug($"set new discovered max time range ticks: {new DateTime(ticks).ToString("o")}");
                     lock (_dateTimeMaxLock)
                     {
-                        segmentMaxDateTicks = DiscoveredMaxDateTicks = Math.Max(DiscoveredMaxDateTicks, ticks);
+                        segmentMaxDateTicks = _instance.DiscoveredMaxDateTicks = Math.Max(_instance.DiscoveredMaxDateTicks, ticks);
                     }
                 }
             }

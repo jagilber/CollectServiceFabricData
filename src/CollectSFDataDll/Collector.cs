@@ -17,7 +17,7 @@ namespace CollectSFData
     using System.Threading;
     using System.Threading.Tasks;
 
-    public class Collector : Constants
+    public class Collector
     {
         private bool _checkedVersion;
         private int _noProgressCounter = 0;
@@ -33,6 +33,13 @@ namespace CollectSFData
         public Collector(bool isConsole = false)
         {
             Log.IsConsole = isConsole;
+        }
+
+        public void Close()
+        {
+            CustomTaskManager.Cancel();
+            _noProgressTimer?.Dispose();
+            Log.Close();
         }
 
         public int Collect()
@@ -94,13 +101,6 @@ namespace CollectSFData
             }
         }
 
-        public void Close()
-        {
-            CustomTaskManager.Cancel();
-            _noProgressTimer?.Dispose();
-            Log.Close();
-        }
-
         public string DetermineClusterId()
         {
             string clusterId = string.Empty;
@@ -142,7 +142,7 @@ namespace CollectSFData
         {
             _noProgressCounter = 0;
             _noProgressTimer = new Timer(NoProgressCallback, null, 0, 60 * 1000);
-            
+
             Log.Open();
             CustomTaskManager.Resume();
             _taskManager?.Wait();
@@ -151,19 +151,19 @@ namespace CollectSFData
             Instance.Initialize(configurationOptions);
             Log.Info($"version: {Config.Version}");
 
-            if((Config.NeedsValidation && !Config.Validate()) | !Config.IsValid)
+            if ((Config.NeedsValidation && !Config.Validate()) | !Config.IsValid)
             {
                 return false;
             }
-            
+
             _parallelConfig = new ParallelOptions { MaxDegreeOfParallelism = Config.Threads };
 
-            ServicePointManager.DefaultConnectionLimit = Config.Threads * MaxThreadMultiplier;
+            ServicePointManager.DefaultConnectionLimit = Config.Threads * Constants.MaxThreadMultiplier;
             ServicePointManager.Expect100Continue = true;
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls12;
 
-            ThreadPool.SetMinThreads(Config.Threads * MinThreadMultiplier, Config.Threads * MinThreadMultiplier);
-            ThreadPool.SetMaxThreads(Config.Threads * MaxThreadMultiplier, Config.Threads * MaxThreadMultiplier);
+            ThreadPool.SetMinThreads(Config.Threads * Constants.MinThreadMultiplier, Config.Threads * Constants.MinThreadMultiplier);
+            ThreadPool.SetMaxThreads(Config.Threads * Constants.MaxThreadMultiplier, Config.Threads * Constants.MaxThreadMultiplier);
 
             return true;
         }
@@ -176,7 +176,7 @@ namespace CollectSFData
 
             if (!Config.FileType.Equals(FileTypesEnum.any) && !Config.FileType.Equals(FileTypesEnum.table))
             {
-                containerPrefix = FileTypes.MapFileTypeUriPrefix(Config.FileType);
+                containerPrefix = FileTypes.MapFileTypeRelativeUriPrefix(Config.FileType);
 
                 if (!string.IsNullOrEmpty(clusterId))
                 {
@@ -209,7 +209,7 @@ namespace CollectSFData
 
                 if (blobMgr.Connect())
                 {
-                    string[] azureFiles = Config.FileUris.Where(x => FileTypes.MapFileUriType(x) == FileUriTypesEnum.azureUri).ToArray();
+                    string[] azureFiles = Config.FileUris.Where(x => FileTypes.MapFileUriType(x) == FileUriTypesEnum.azureStorageUri).ToArray();
 
                     if (azureFiles.Any())
                     {
@@ -234,14 +234,14 @@ namespace CollectSFData
             }
             else if (Config.IsKustoConfigured())
             {
-                Log.Last($"{DataExplorer}/clusters/{Instance.Kusto.Endpoint.ClusterName}/databases/{Instance.Kusto.Endpoint.DatabaseName}", ConsoleColor.Cyan);
+                Log.Last($"{Constants.DataExplorer}/clusters/{Instance.Kusto.Endpoint.ClusterName}/databases/{Instance.Kusto.Endpoint.DatabaseName}", ConsoleColor.Cyan);
             }
 
             if (Instance.FileObjects.Any(FileStatus.failed | FileStatus.uploading))
             {
                 Log.Warning($"adding failed uris to FileUris. use save option to keep list of failed uris.");
                 List<string> ingestList = new List<string>();
-                ingestList.AddRange(Instance.FileObjects.FindAll(FileStatus.failed|FileStatus.uploading).Select(x=> x.FileUri));
+                ingestList.AddRange(Instance.FileObjects.FindAll(FileStatus.failed | FileStatus.uploading).Select(x => x.FileUri));
                 Config.FileUris = ingestList.ToArray();
             }
         }
@@ -283,8 +283,8 @@ namespace CollectSFData
             {
                 if (Config.FileType != FileTypesEnum.table)
                 {
-                    DateTime discoveredMinDateTime = new DateTime(DiscoveredMinDateTicks);
-                    DateTime discoveredMaxDateTime = new DateTime(DiscoveredMaxDateTicks);
+                    DateTime discoveredMinDateTime = new DateTime(Instance.DiscoveredMinDateTicks);
+                    DateTime discoveredMaxDateTime = new DateTime(Instance.DiscoveredMaxDateTicks);
 
                     Log.Last($"discovered time range: {discoveredMinDateTime.ToString("o")} - {discoveredMaxDateTime.ToString("o")}", ConsoleColor.Green);
 
@@ -370,7 +370,7 @@ namespace CollectSFData
         {
             Log.Debug("enter");
             fileObject.Status = FileStatus.queued;
-            
+
             if (Config.IsKustoConfigured() | Config.IsLogAnalyticsConfigured())
             {
                 if (Config.IsKustoConfigured())
@@ -430,31 +430,31 @@ namespace CollectSFData
                 switch (Config.FileType)
                 {
                     case FileTypesEnum.counter:
-                        files = Directory.GetFiles(Config.CacheLocation, $"*{PerfCtrExtension}", SearchOption.AllDirectories).ToList();
+                        files = Directory.GetFiles(Config.CacheLocation, $"*{Constants.PerfCtrExtension}", SearchOption.AllDirectories).ToList();
 
                         if (files.Count < 1)
                         {
-                            files = Directory.GetFiles(Config.CacheLocation, $"*{PerfCsvExtension}", SearchOption.AllDirectories).ToList();
+                            files = Directory.GetFiles(Config.CacheLocation, $"*{Constants.PerfCsvExtension}", SearchOption.AllDirectories).ToList();
                         }
 
                         break;
 
                     case FileTypesEnum.setup:
-                        files = Directory.GetFiles(Config.CacheLocation, $"*{SetupExtension}", SearchOption.AllDirectories).ToList();
+                        files = Directory.GetFiles(Config.CacheLocation, $"*{Constants.SetupExtension}", SearchOption.AllDirectories).ToList();
 
                         break;
 
                     case FileTypesEnum.table:
-                        files = Directory.GetFiles(Config.CacheLocation, $"*{TableExtension}", SearchOption.AllDirectories).ToList();
+                        files = Directory.GetFiles(Config.CacheLocation, $"*{Constants.TableExtension}", SearchOption.AllDirectories).ToList();
 
                         break;
 
                     case FileTypesEnum.trace:
-                        files = Directory.GetFiles(Config.CacheLocation, $"*{TraceFileExtension}{ZipExtension}", SearchOption.AllDirectories).ToList();
+                        files = Directory.GetFiles(Config.CacheLocation, $"*{Constants.TraceFileExtension}{Constants.ZipExtension}", SearchOption.AllDirectories).ToList();
 
                         if (files.Count < 1)
                         {
-                            files = Directory.GetFiles(Config.CacheLocation, $"*{TraceFileExtension}", SearchOption.AllDirectories).ToList();
+                            files = Directory.GetFiles(Config.CacheLocation, $"*{Constants.TraceFileExtension}", SearchOption.AllDirectories).ToList();
                         }
 
                         break;
@@ -472,7 +472,7 @@ namespace CollectSFData
 
             foreach (string file in files)
             {
-                FileObject fileObject = new FileObject(file, Config.CacheLocation){ Status = FileStatus.enumerated};
+                FileObject fileObject = new FileObject(file, Config.CacheLocation) { Status = FileStatus.enumerated };
                 Instance.FileObjects.Add(fileObject);
 
                 Log.Info($"adding file: {fileObject.FileUri}", ConsoleColor.Green);
