@@ -2,12 +2,13 @@
 .SYNOPSIS
 setup variables for running tests
 #>
+using namespace System.Security.Cryptography.X509Certificates;
 [cmdletbinding()]
 param(
     [switch]$clean,
     [switch]$reset,
     [string]$configurationFile = "$env:LOCALAPPDATA\collectsfdata\collectSfDataTestProperties.json", # "$psscriptroot\..\bin\temp\collectSfDataTestProperties.json",
-    [string]$tempDir = "$psscriptroot\..\bin\temp"
+    [string]$tempDir = "$psscriptroot\..\src\bin\temp"
 )
 
 $PSModuleAutoLoadingPreference = 2
@@ -20,7 +21,7 @@ class TestSettings {
     # for file download and gather tests
     [string]$testAzStorageAccount = "collectsfdatatests"
     [string]$testAzClientId = ""
-    [string]$testAzClientSecret = ""
+    [string]$testAzClientCertificate = ""
 
     # for azure cluster deployments
     [string]$adminUserName = $null
@@ -28,7 +29,9 @@ class TestSettings {
       
     # existing collectsfdata variables
     [string]$AzureClientId = $null
+    [string]$AzureClientCertificate = $null
     [string]$AzureClientSecret = $null
+    [string]$AzureKeyVault = $null
     [string]$AzureResourceGroup = $null
     [string]$AzureResourceGroupLocation = $null
     [string]$AzureSubscriptionId = $null
@@ -43,6 +46,7 @@ class TestEnv {
     [switch]$reset = $reset
     [string]$configurationFile = $configurationFile
     [string]$tempDir = $tempDir
+    [string]$certFile = $null
 
     TestEnv() {
         $this.CheckTempDir()
@@ -57,7 +61,7 @@ class TestEnv {
 
     [bool] CheckAzureConfig() {
         $settings = $this.testSettings
-        if (!$settings.AzureClientId -or !$settings.AzureClientSecret -or !$settings.AzureResourceGroup -or !$settings.AzureResourceGroupLocation) {
+        if (!$settings.AzureClientId -or !$settings.AzureClientCertificate -or !$settings.AzureResourceGroup -or !$settings.AzureResourceGroupLocation) {
             Write-Warning "azure settings not configured. storage tests may fail"
             return $false
         }
@@ -67,88 +71,132 @@ class TestEnv {
         $credential = new-object -typename System.Management.Automation.PSCredential `
             -argumentlist @(
             $settings.AzureClientId, 
-            ($settings.AzureClientSecret | convertto-securestring -Force -AsPlainText)
+            ($settings.AzureClientCertificate | convertto-securestring -Force -AsPlainText)
         )
         #>
 
         if (!(get-module -ListAvailable -Name az.accounts)) {
-            install-module Az.Accounts #-UseWindowsPowerShell
-            import-module Az.Accounts #-UseWindowsPowerShell
+            install-module Az.Accounts -Force -scope CurrentUser #-UseWindowsPowerShell
         }
+        import-module Az.Accounts #-UseWindowsPowerShell
 
         if (!(get-module -ListAvailable -Name az.storage)) {
-            install-module Az.Storage #-UseWindowsPowerShell
-            import-module Az.Storage #-UseWindowsPowerShell
+            install-module Az.Storage -Force -scope CurrentUser #-UseWindowsPowerShell
         }
+        import-module Az.Storage #-UseWindowsPowerShell
 
         if (!(get-module -ListAvailable -Name Az.Resources)) {
-            install-module Az.Resources #-UseWindowsPowerShell
-            import-module Az.Resources #-UseWindowsPowerShell
+            install-module Az.Resources -Force -scope CurrentUser #-UseWindowsPowerShell
         }
+        import-module Az.Resources #-UseWindowsPowerShell
 
-        # bug Could not load type 'System.Security.Cryptography.SHA256Cng' from assembly 'System.Core, Version=4.0.0.0,
-        # https://github.com/PowerShell/PowerShell/issues/10473
-        # Cng is not in .net core but the az modules havent been updated
-        # possible cause is credential
-        # need cert to use appid
-        #connect-AzAccount -TenantId $settings.AzureTenantId -Credential $credential -ServicePrincipal
-        # https://docs.microsoft.com/en-us/powershell/module/az.accounts/connect-azaccount?view=azps-4.7.0#example-7--connect-using-certificates
-        # .\azure-az-create-aad-application-spn.ps1 -aadDisplayName collectsfdatatestcert -logonType cert
+        if (!(get-module -ListAvailable -Name az.keyvault)) {
+            install-module Az.KeyVault -Force -scope CurrentUser #-UseWindowsPowerShell
+        }
+        import-module Az.KeyVault #-UseWindowsPowerShell
+
+        $error.Clear()
+        write-host "loading test client cert $($settings.testAzClientCertificate)"
+        $cert = $this.LoadCertificate([convert]::FromBase64String($settings.testAzClientCertificate))
+        if($error) { return $false}
+
         write-host "connect-AzAccount -TenantId $($settings.AzureTenantId) `
             -ApplicationId $($settings.testAzClientId) `
             -ServicePrincipal `
-            -CertificateThumbprint $($settings.testAzClientSecret)
+            -CertificateThumbprint $($cert.thumbprint)
         "
         connect-AzAccount -TenantId $settings.AzureTenantId `
             -ApplicationId $settings.testAzClientId `
             -ServicePrincipal `
-            -CertificateThumbprint $settings.testAzClientSecret
+            -CertificateThumbprint $cert.thumbprint
         
-        get-azcontext | fl *
+        if(!(get-azcontext)){ return $false}
 
-        write-host "checking resource group $($settings.AzureResourceGroup)"
-        if (!(get-azresourcegroup $settings.AzureResourceGroup -Location $settings.AzureResourceGroupLocation)) {
-            if (!(new-azresourcegroup $settings.AzureResourceGroup -Location $settings.AzureResourceGroupLocation)) {
-                throw new-object System.UnauthorizedAccessException($error | out-string)
-            }
+        get-azcontext | Format-List *
+
+        if(!$this.CheckResourceGroup()) { return $false }
+        if(!$this.CheckStorageAccount()) { return $false }
+        
+        if($this.CheckKeyVault()){
+            $this.CheckKeyVaultCert()
         }
 
-        $settings.testAzStorageAccount = "$($settings.testAzStorageAccount)$([math]::Abs($settings.AzureClientId.GetHashCode()))".Substring(0, 24)
-        write-host "setting unique storage account $($settings.testAzStorageAccount)"
-        $this.SaveConfig()
+        return $true
+    }
 
-        write-host "checking storage account $($settings.testAzStorageAccount)"
-        $sa = get-azstorageaccount $settings.testAzStorageAccount -resourcegroupname $settings.AzureResourceGroup
-        if (!($sa)) {
-            if (!(new-azstorageaccount $settings.testAzStorageAccount -skuname 'Standard_LRS' -resourcegroupname $settings.AzureResourceGroup -Location $settings.AzureResourceGroupLocation)) {
-                throw new-object System.UnauthorizedAccessException($error | out-string)
+    [bool] CheckKeyVault(){
+        $error.Clear()
+        $settings = $this.testSettings
+        $keyvaultname = $null
+
+        if($settings.AzureKeyVault){
+            if($this.GetAzureKeyVault($settings.AzureKeyVault)) {
+                return $true
             }
-            $sa = get-azstorageaccount $settings.testAzStorageAccount -resourcegroupname $settings.AzureResourceGroup
+        }
+        else{
+            $keyvaultname = "$($settings.AzureResourceGroup)$([math]::Abs($settings.AzureResourceGroup.GetHashCode()))".Substring(0, 24)
         }
 
-        write-host "getting key $($settings.testAzStorageAccount)"
-        $sk = Get-AzStorageAccountKey -ResourceGroupName $settings.AzureResourceGroup -Name $settings.testAzStorageAccount
-        #$sc = new-azstoragecontext -storageaccountname $settings.testAzStorageAccount -storageaccountkey ([convert]::Tobase64String([text.encoding]::Unicode.GetBytes($sk.Value)))
-        $sc = new-azstoragecontext -storageaccountname $settings.testAzStorageAccount -storageaccountkey ($sk[0].Value)
-        $st = New-AzStorageAccountSASToken -ResourceType Container, Service, Object `
-            -Permission 'racwdlup' `
-            -Protocol HttpsOnly `
-            -StartTime (get-date) `
-            -ExpiryTime (get-date).AddHours(8) `
-            -Context $sc `
-            -Service Blob, Table, File, Queue
-
-        $global:sasuri = "$($sa.Context.BlobEndPoint)$($st)"
-        $global:storageAccount = $sa
-        write-host "setting test token $global:sasUri"
-        $settings.SasKey = $global:sasuri
+        write-host "keyvault name:$keyvaultname"
+        $retval = New-AzKeyVault -Name $keyvaultname -ResourceGroupName $settings.AzureResourceGroup -Location $settings.AzureResourceGroupLocation -EnabledForDeployment -EnabledForTemplateDeployment -EnableRbacAuthorization
+        write-host "new keyvault result:$retval"
+        $settings.AzureKeyVault = (Get-AzKeyVault -resourcegroupname $settings.AzureResourceGroup -vaultname $keyvaultname).VaultUri
+        write-host "setting key vault $($settings.AzureKeyVault)"
         $this.SaveConfig()
+
+        if(!$settings.AzureKeyVault){
+            return $false;
+        }
+        return $true;
+    }
+
+    [X509Certificate2] LoadCertificate([string]$base64String){
+        $error.Clear()
+        $settings = $this.testSettings
+        write-host "loading collectsfdata cert $($settings.AzureClientCertificate)"
+        [X509Certificate2]$cert = $null
+        [byte[]] $bytes = $null
+
+        if($settings.adminPassword){
+            $cert = [Security.Cryptography.X509Certificates.X509Certificate2]::new([convert]::FromBase64String($settings.AzureClientCertificate),$settings.adminPassword,[X509KeyStorageFlags]::Exportable)
+            $bytes = $cert.Export([X509ContentType]::pkcs12,$settings.adminPassword)
+        }
+        else{
+            $cert = [Security.Cryptography.X509Certificates.X509Certificate2]::new([convert]::FromBase64String($settings.AzureClientCertificate),[string]::empty,[X509KeyStorageFlags]::Exportable)
+            $bytes = $cert.Export([X509ContentType]::pkcs12)
+        }
+
+        if($bytes){
+            $this.certFile = "$($this.tempdir)\$($cert.thumbprint).pfx"
+            write-host "saving cert to temp dir $($this.certFile)"
+            [io.File]::WriteAllBytes($this.certFile,$bytes)
+        }
+
+        return $cert
+    }
+
+    [bool] CheckKeyVaultCert(){
+        $error.Clear()
+        $settings = $this.testSettings
+        write-host "loading collectsfdata cert $($settings.AzureClientCertificate)"
+        $cert = $this.LoadCertificate([convert]::FromBase64String($settings.AzureClientCertificate))
+        if($error) { return $false}
+        
+        $keyVault = $this.GetAzureKeyVault($settings.AzureKeyVault)
+        if(!$keyVault){ return $false}
+        
+        $keyvaultname = [uri]::new($settings.AzureKeyVault).Host.Split('.')[0]
+        
+        write-host "import-azkeyvaultcertificate -vaultname $keyvaultname -name $($cert.thumbprint) -filepath $($this.certFile)"
+        import-azkeyvaultcertificate -vaultname $keyvaultname -name ($cert.thumbprint) -filepath $this.certFile
+
         return $true
     }
 
     [bool] CheckKustoConfig() {
         $settings = $this.testSettings
-        if (!$settings.AzureClientId -or !$settings.AzureClientSecret -or !$settings.AzureResourceGroup -or !$settings.AzureResourceGroupLocation) {
+        if (!$settings.AzureClientId -or !$settings.AzureClientCertificate -or !$settings.AzureResourceGroup -or !$settings.AzureResourceGroupLocation) {
             Write-Warning "azure settings not configured. kusto tests may fail"
             return $false
         }
@@ -225,6 +273,56 @@ class TestEnv {
         return $true
     }
 
+    [bool] CheckResourceGroup(){
+        $settings = $this.testSettings
+        write-host "checking resource group $($settings.AzureResourceGroup)"
+        if (!(get-azresourcegroup $settings.AzureResourceGroup -Location $settings.AzureResourceGroupLocation)) {
+            if (!(new-azresourcegroup $settings.AzureResourceGroup -Location $settings.AzureResourceGroupLocation)) {
+                throw new-object System.UnauthorizedAccessException($error | out-string)
+                return $false;
+            }
+        }
+        return $true;
+    }
+
+    [bool] CheckStorageAccount(){
+        $settings = $this.testSettings
+        if(!$settings.testAzStorageAccount){
+            $settings.testAzStorageAccount = "$($settings.testAzStorageAccount)$([math]::Abs($settings.AzureResourceGroup.GetHashCode()))".Substring(0, 24)
+        }
+        write-host "setting unique storage account $($settings.testAzStorageAccount)"
+        $this.SaveConfig()
+
+        write-host "checking storage account $($settings.testAzStorageAccount)"
+        $sa = get-azstorageaccount $settings.testAzStorageAccount -resourcegroupname $settings.AzureResourceGroup
+        if (!($sa)) {
+            if (!(new-azstorageaccount $settings.testAzStorageAccount -skuname 'Standard_LRS' -resourcegroupname $settings.AzureResourceGroup -Location $settings.AzureResourceGroupLocation)) {
+                throw new-object System.UnauthorizedAccessException($error | out-string)
+                return $false
+            }
+            $sa = get-azstorageaccount $settings.testAzStorageAccount -resourcegroupname $settings.AzureResourceGroup
+        }
+
+        write-host "getting key $($settings.testAzStorageAccount)"
+        $sk = Get-AzStorageAccountKey -ResourceGroupName $settings.AzureResourceGroup -Name $settings.testAzStorageAccount
+        #$sc = new-azstoragecontext -storageaccountname $settings.testAzStorageAccount -storageaccountkey ([convert]::Tobase64String([text.encoding]::Unicode.GetBytes($sk.Value)))
+        $sc = new-azstoragecontext -storageaccountname $settings.testAzStorageAccount -storageaccountkey ($sk[0].Value)
+        $st = New-AzStorageAccountSASToken -ResourceType Container, Service, Object `
+            -Permission 'racwdlup' `
+            -Protocol HttpsOnly `
+            -StartTime (get-date) `
+            -ExpiryTime (get-date).AddHours(8) `
+            -Context $sc `
+            -Service Blob, Table, File, Queue
+
+        $global:sasuri = "$($sa.Context.BlobEndPoint)$($st)"
+        $global:storageAccount = $sa
+        write-host "setting test token $global:sasUri"
+        $settings.SasKey = $global:sasuri
+        $this.SaveConfig()
+        return $true
+    }
+
     [void] CheckTempDir() {
         write-host "checking temp dir $($this.tempDir)"
         if ((test-path $this.tempDir) -and $this.clean) {
@@ -245,6 +343,14 @@ class TestEnv {
             write-host ".\azure-az-create-aad-application-spn.ps1 -aadDisplayName collectsfdatatest -uri http://collectsfdatatest -logontype certthumb"
             . $this.configurationFile
         }
+    }
+
+    [object] GetAzureKeyVault([string]$vaultUri){
+        $error.Clear()
+        $settings = $this.testsettings
+        $keyvaultname = [uri]::new($vaultUri).Host.Split('.')[0]
+        write-host "checking keyvault:name:$keyvaultname"
+        return (Get-AzKeyVault -ResourceGroupName $settings.AzureResourceGroup -VaultName $keyvaultname)
     }
 
     [TestSettings] ReadConfig() {

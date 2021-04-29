@@ -19,7 +19,7 @@ using System.Threading.Tasks;
 
 namespace CollectSFData.Kusto
 {
-    public class KustoConnection : Constants
+    public class KustoConnection
     {
         private const int _maxMessageCount = 32;
         private readonly CustomTaskManager _kustoTasks = new CustomTaskManager(true);
@@ -155,7 +155,7 @@ namespace CollectSFData.Kusto
                 return true;
             }
 
-            string cleanUri = Regex.Replace(relativeUri, $"\\.?\\d*?({ZipExtension}|{TableExtension})", "");
+            string cleanUri = Regex.Replace(relativeUri, $"\\.?\\d*?({Constants.ZipExtension}|{Constants.TableExtension})", "");
             return !_instance.FileObjects.HasFileUri(cleanUri);
         }
 
@@ -173,7 +173,7 @@ namespace CollectSFData.Kusto
                 && Config.FileType == FileTypesEnum.trace)
             {
                 // Fetch resource ID from ingested traces
-                var results = Endpoint.Query($"['{Endpoint.TableName}']" +
+                List<string> results = Endpoint.Query($"['{Endpoint.TableName}']" +
                     $" | where Type == 'InfrastructureService.RestClientHelper'" +
                     $" | take 1");
 
@@ -188,8 +188,8 @@ namespace CollectSFData.Kusto
 
             if (!string.IsNullOrWhiteSpace(resourceUri))
             {
-                var metaDatatableName = "TableMetaData";
-                var metaDatetableSchema = "TimeStamp:datetime, startTime:datetime, endTime:datetime, resourceId:string, tableName:string, logType:string";
+                string metaDatatableName = "TableMetaData";
+                string metaDatetableSchema = "TimeStamp:datetime, startTime:datetime, endTime:datetime, resourceId:string, tableName:string, logType:string";
 
                 if (Endpoint.CreateTable(metaDatatableName, metaDatetableSchema))
                 {
@@ -498,12 +498,12 @@ namespace CollectSFData.Kusto
         {
             while ((!_tokenSource.IsCancellationRequested | _instance.FileObjects.Count(FileStatus.uploading) > 0) & !_kustoTasks.IsCancellationRequested)
             {
-                Thread.Sleep(ThreadSleepMs100);
+                Thread.Sleep(Constants.ThreadSleepMs100);
                 QueueMessageMonitor();
 
                 if (!Config.KustoUseIngestMessage)
                 {
-                    Thread.Sleep(ThreadSleepMs10000);
+                    Thread.Sleep(Constants.ThreadSleepMs10000);
 
                     if (!Endpoint.HasTable(Endpoint.TableName))
                     {

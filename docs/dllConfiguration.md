@@ -8,8 +8,15 @@ To use as an exe, see [configuration](./configuration.md).
 ## Design
 
 CollectSFData is a high performance multi-threaded binary with a custom task scheduler.  
-The 'Instance' state class is a singleton. Collector is reusable by calling Collect() multiple times.  
-Only one instance of Collector should be used concurrently.  
+Using as a dll, Collector() is reusable but only one instance of Collector should be used concurrently.
+
+The 'Collector' class is the main class used to control collection of data.
+The 'ConfigurationOptions' class is used to configure the collection.
+The 'Instance' class is a singleton that contains information and configuration about current collection.
+
+If Collect() succeeds, 0 is returned, if fails return is > 0.
+After Collect() has been called, both Instance and ConfigurationOptions can be used to review results.
+
 
 ## Supported Configurations
 
@@ -17,29 +24,9 @@ The below configurations are currently supported.
 
 ### .Net Framework
 
-#### Windows
-
-.Net Framework 4.6.2+
-
-### .Net Core
-
-#### Windows
-
-.Net Core 3.1+
-.Net 5.0+
-
-#### Windows Container
-
-Supports GatherType 'counter' performance counter logs with option 'UseTx' == true.
-
-.Net Core 3.1+
-.Net 5.0+
-
-#### Linux
-
-Does not support GatherType 'counter' performance counter logs.
-
-.Net Core 3.1+
+.Net Framework 4.6.2
+.Net Framework 4.7.2+
+.Net Core 3.1
 .Net 5.0+
 
 ## Adding NuGet package to project
@@ -49,19 +36,26 @@ Use one of the provided commands [Microsoft.ServiceFabric.CollectSFData](https:/
 
 In Visual Studio, use 'NuGet Package Manager' to install package.  
 
-## Kusto Setup
+## Authorization
 
-### **Creating Kusto Cluster**
+### **Using with Client Credentials for non-interactive execution**
 
-(todo: see scripts directory)
-
-### **Headless Execution with Client Credentials**
-
-Use these steps to optionally configure CollectSFData to run headless with client credentials and client certificate. 
+Use these steps to optionally configure CollectSFData to run non-interactively with client credentials and client certificate. 
 
 #### **Configuration of Azure Active Directory App Registration**
 
+#### **Configuration of System Managed Identity**
+
+#### **Configuration of User Managed Identity**
+
 #### **Configuration of Client Certificate**
+
+CollectSFData can use a certificate for authorization to Azure.
+The certificate can be stored in the following locations:
+- local file
+- local cert store
+- base64 string
+- keyvault
 
 ## Implementing Collector
 
@@ -216,6 +210,41 @@ private static int Main(string[] args)
 }
 ```
 
+## Instance Results
+
+After Collect() is called, all instance information is in Collector.Instance class.
+Instance.FileObjects contains all files processed and their current state.
+After Collect() has returned, final state can be checked.
+
+example:
+
+```c#
+int retval = collector.Collect(config);
+FileObjectCollection fileObjects = collector.Instance.FileObjects.Any(FileStatus.failed | FileStatus.uploading)
+```
+
+Each fileObject will have one of the following flag enum states:
+
+```c#
+[Flags]
+public enum FileStatus : int
+   {
+       unknown = 0,
+       enumerated = 1, // found in blob storage or locally
+       existing = 2, // already ingested into table
+       queued = 4, // queued for download
+       downloading = 8, // downloading from blob storage
+       formatting = 16, // formatting into csv
+       uploading = 32, // uploading to kusto table
+       failed = 64, // ingest into kusto failed
+       succeeded = 128, // ingest into kusto succeeded
+       all = 256
+   }
+```
+
+On exit, the following states will be checked.
+if existing + succeeded == total then collection was successful.
+
 ## Logging
 
 Externally there is logging both to console output and optionally to a log file. When using as a DLL, subscribing to event 'Log_MessageLogged' will provide the same information in 'LogMessage' object format. 
@@ -257,7 +286,7 @@ When starting execution from Collect(), current configuration is first validated
 
 ### CSV log file compliance for GatherType trace
 
-Certain events in the Service Fabric detailed diagnostic logs gathered when 'GatherType' is set to 'trace' are not CSV compliant and can fail ingestion into Kusto. Current mitigation until these traces are properly formatted is to either set 'UseKustoBlobAsSource' == false which is remarkably slow and more resource intensive. Another option is to do two collections with Collect() as shown in the following example assuming there will be a small number of failures during first collect. This is how CollectSFData currently executes when executing as an exe. See [Program.cs](..\src\CollectSFData\Program.cs).  
+Certain events in the Service Fabric detailed diagnostic logs gathered when 'GatherType' is set to 'trace' are not CSV compliant and can fail ingestion into Kusto. Current mitigation until these traces are properly formatted is to either set 'UseKustoBlobAsSource' == false which is remarkably slow and more resource intensive. Another option is to do two collections with Collect() as shown in the following example assuming there will be a small number of failures during first collect. This is how CollectSFData currently executes when executing as an exe. See [Program.cs](../src/CollectSFData/Program.cs).  
 
 ```c#
 using CollectSFData.Common;
