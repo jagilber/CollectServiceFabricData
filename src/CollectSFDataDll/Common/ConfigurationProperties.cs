@@ -13,10 +13,10 @@ namespace CollectSFData.Common
         public string AzureClientCertificate { get; set; }
 
         public string AzureClientId { get; set; }
-        public string AzureClientSecret { get; set; }
-        public string AzureKeyVault { get; set; }
 
-        public bool AzureManagedIdentity { get; set; } = false;
+        public string AzureClientSecret { get; set; }
+
+        public string AzureKeyVault { get; set; }
 
         public string AzureResourceGroup { get; set; }
 

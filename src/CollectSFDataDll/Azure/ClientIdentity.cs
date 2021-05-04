@@ -6,37 +6,34 @@ using System;
 namespace CollectSFData.Azure
 {
     public class ClientIdentity
-    {
+    {   
         private Instance _instance = Instance.Singleton();
         public bool IsAppRegistration { get; private set; } = false;
         public bool IsSystemManagedIdentity { get; private set; } = false;
+        public bool IsTypeManagedIdentity => (IsSystemManagedIdentity | IsUserManagedIdentity);
         public bool IsUserManagedIdentity { get; private set; } = false;
         public AccessToken ManagedIdentityToken { get; private set; }
         private ConfigurationOptions _config => _instance.Config;
 
-        public ClientIdentity()
+        public void SetIdentityType()
         {
-            if (!string.IsNullOrEmpty(_config.AzureClientId))
+            if (!string.IsNullOrEmpty(_config.AzureClientId) & !string.IsNullOrEmpty(_config.AzureClientCertificate))
             {
                 IsAppRegistration = true;
             }
-
-            if (!_config.AzureManagedIdentity)
-            {
-                return;
-            }
-
-            if (!string.IsNullOrEmpty(_config.AzureClientId))
+            else if (!string.IsNullOrEmpty(_config.AzureClientId))
             {
                 IsUserManagedIdentity = IsManagedIdentity(_config.AzureClientId);
             }
-
-            if (!IsUserManagedIdentity && string.IsNullOrEmpty(_config.AzureClientId))
+            else if (string.IsNullOrEmpty(_config.AzureClientId))
             {
                 IsSystemManagedIdentity = IsManagedIdentity();
             }
+        }
 
-            IsAppRegistration = !(IsUserManagedIdentity | IsSystemManagedIdentity);
+        public ClientIdentity()
+        {
+            SetIdentityType();
         }
 
         public DefaultAzureCredential GetDefaultAzureCredentials(string clientId = null)
@@ -68,6 +65,7 @@ namespace CollectSFData.Azure
         public bool IsManagedIdentity(string managedClientId = null)
         {
             bool retval = false;
+        
             try
             {
                 ManagedIdentityCredential managedCredential = new ManagedIdentityCredential(managedClientId, new TokenCredentialOptions
@@ -92,7 +90,7 @@ namespace CollectSFData.Azure
             }
             catch (Exception e)
             {
-                Log.Info($"exception:{e}");
+                Log.Info($"exception:{e.Message}");
             }
 
             Log.Info($"returning{retval}");
