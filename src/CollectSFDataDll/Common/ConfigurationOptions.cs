@@ -29,18 +29,9 @@ namespace CollectSFData.Common
         private static string[] _commandlineArguments = new string[0];
         private static ConfigurationOptions _defaultConfig;
         private readonly string _workDir = "csfd";
-        private X509Certificate2 _clientCertificate;
         private string _tempPath;
 
-        public X509Certificate2 ClientCertificate
-        {
-            get => _clientCertificate;
-            set
-            {
-                _clientCertificate = value;
-                AzureClientCertificate = _clientCertificate?.Thumbprint;
-            }
-        }
+        public X509Certificate2 ClientCertificate { get; set; }
 
         public new string EndTimeStamp
         {
@@ -104,8 +95,7 @@ namespace CollectSFData.Common
         }
 
         public string Version { get; } = $"{Process.GetCurrentProcess().MainModule?.FileVersionInfo.FileVersion}";
-
-        private bool _defaultConfigLoaded => _defaultConfig != null;
+        private bool _defaultConfigLoaded => HasValue(_defaultConfig);
 
         static ConfigurationOptions()
         {
@@ -200,7 +190,7 @@ namespace CollectSFData.Common
         {
             DateTime dateTime = DateTime.MinValue;
 
-            if (string.IsNullOrEmpty(timeString))
+            if (!HasValue(timeString))
             {
                 Log.Warning("empty time string");
             }
@@ -281,25 +271,26 @@ namespace CollectSFData.Common
         {
             // saving config file with no options will set cache location to %temp% by default
             // collectsfdata.exe -save file.json
-            return !(string.IsNullOrEmpty(CacheLocation) | (CacheLocation == _tempPath));
+            return !(!HasValue(CacheLocation) | (CacheLocation == _tempPath));
         }
 
         public bool IsClientIdConfigured()
         {
-            bool configured = ((HasValue(AzureClientId) & !HasValue(AzureKeyVault) & HasValue(AzureClientSecret) & AzureManagedIdentity == false) // app registration with clientsecret
-                | (HasValue(AzureClientId) & HasValue(AzureKeyVault) & HasValue(AzureClientCertificate) & AzureManagedIdentity == false) // app registration with kv
-                | (HasValue(AzureClientId) & !HasValue(AzureKeyVault) & HasValue(AzureClientCertificate) & AzureManagedIdentity == false) // app registration
-                | (HasValue(AzureClientId) & HasValue(AzureKeyVault) & HasValue(AzureClientCertificate) & AzureManagedIdentity == true) // app registration with keyvault and system managed identity to kv
-                | (!HasValue(AzureClientId) & HasValue(AzureKeyVault) & HasValue(AzureClientCertificate) & AzureManagedIdentity == true) // system managed identity with keyvault
-                | (HasValue(AzureClientId) & !HasValue(AzureKeyVault) & !HasValue(AzureClientCertificate) & AzureManagedIdentity == true) // user managed identity
+            bool configured = ((HasValue(AzureClientId) & HasValue(ClientCertificate)) // app registration configured
+                || (HasValue(AzureClientId) & !HasValue(AzureKeyVault) & HasValue(AzureClientCertificate) & !HasValue(AzureClientSecret)) // app registration
+                || (HasValue(AzureClientId) & !HasValue(AzureKeyVault) & !HasValue(AzureClientCertificate) & HasValue(AzureClientSecret)) // app registration with clientsecret
+                || (HasValue(AzureClientId) & HasValue(AzureKeyVault)  & !HasValue(AzureClientCertificate) & HasValue(AzureClientSecret)) // app registration with kv user managed
+                || (!HasValue(AzureClientId) & HasValue(AzureKeyVault) & !HasValue(AzureClientCertificate) & HasValue(AzureClientSecret)) // system managed identity with kv
+                || (HasValue(AzureClientId) & !HasValue(AzureKeyVault) & !HasValue(AzureClientCertificate) & !HasValue(AzureClientSecret)) // user managed identity
             );
 
+            Log.Debug($"exit:configured:{configured} azureClientId:{AzureClientId} clientCertificate:{ClientCertificate} azureKeyVault:{AzureKeyVault} azureClientSecret:{AzureClientSecret}");
             return configured;
         }
 
         public bool IsGuidIfPopulated(string guid)
         {
-            if (string.IsNullOrEmpty(guid))
+            if (!HasValue(guid))
             {
                 return true;
             }
@@ -310,24 +301,24 @@ namespace CollectSFData.Common
 
         public bool IsKustoConfigured()
         {
-            return (!FileType.Equals(FileTypesEnum.any) & !string.IsNullOrEmpty(KustoCluster) & !string.IsNullOrEmpty(KustoTable));
+            return (!FileType.Equals(FileTypesEnum.any) & HasValue(KustoCluster) & HasValue(KustoTable));
         }
 
         public bool IsKustoPurgeRequested()
         {
-            return !string.IsNullOrEmpty(KustoPurge);
+            return HasValue(KustoPurge);
         }
 
         public bool IsLogAnalyticsConfigured()
         {
-            return (!string.IsNullOrEmpty(LogAnalyticsId) | LogAnalyticsCreate)
-                & (!string.IsNullOrEmpty(LogAnalyticsKey) | LogAnalyticsCreate)
-                & !string.IsNullOrEmpty(LogAnalyticsName);
+            return (HasValue(LogAnalyticsId) | LogAnalyticsCreate)
+                & (HasValue(LogAnalyticsKey) | LogAnalyticsCreate)
+                & HasValue(LogAnalyticsName);
         }
 
         public bool IsLogAnalyticsPurgeRequested()
         {
-            return !string.IsNullOrEmpty(LogAnalyticsPurge);
+            return HasValue(LogAnalyticsPurge);
         }
 
         public void MergeConfig(string optionsFile)
@@ -372,14 +363,14 @@ namespace CollectSFData.Common
 
             foreach (PropertyInfo instanceProperty in instanceProperties)
             {
-                if (!fileOptions.ToObject<Dictionary<string, JToken>>().Any(x => Regex.IsMatch(x.Key, instanceProperty.Name, RegexOptions.IgnoreCase)))
+                if (!fileOptions.ToObject<Dictionary<string, JToken>>().Any(x => Regex.IsMatch(x.Key, $"^{instanceProperty.Name}$", RegexOptions.IgnoreCase)))
                 {
                     Log.Debug($"instance option not found in file:{instanceProperty.Name}");
                     continue;
                 }
 
                 JToken token = fileOptions.ToObject<Dictionary<string, JToken>>()
-                    .First(x => Regex.IsMatch(x.Key, instanceProperty.Name, RegexOptions.IgnoreCase)).Value;
+                    .First(x => Regex.IsMatch(x.Key, $"^{instanceProperty.Name}$", RegexOptions.IgnoreCase)).Value;
                 Log.Debug($"token:{token.Type}");
 
                 switch (token.Type)
@@ -443,7 +434,7 @@ namespace CollectSFData.Common
 
         public string SaveConfigFile()
         {
-            if (string.IsNullOrEmpty(SaveConfiguration))
+            if (!HasValue(SaveConfiguration))
             {
                 return null;
             }
@@ -508,7 +499,6 @@ namespace CollectSFData.Common
                 else
                 {
                     CheckLogFile();
-
                     retval &= ValidateSasKey();
                     retval &= ValidateFileType();
                     retval &= ValidateTime();
@@ -541,53 +531,77 @@ namespace CollectSFData.Common
 
         public bool ValidateAad()
         {
+            CertificateUtilities certificateUtilities = new CertificateUtilities();
+            AzureResourceManager arm = new AzureResourceManager();
             bool retval = true;
-            bool needsAad = IsKustoConfigured() | IsKustoPurgeRequested() | IsLogAnalyticsConfigured();
-            needsAad |= LogAnalyticsCreate | LogAnalyticsRecreate | IsLogAnalyticsPurgeRequested();
             bool clientIdConfigured = IsClientIdConfigured();
-            needsAad |= clientIdConfigured;
+            bool usingAad = clientIdConfigured | IsKustoConfigured() | IsKustoPurgeRequested();
+            usingAad |= LogAnalyticsCreate | LogAnalyticsRecreate | IsLogAnalyticsPurgeRequested() | IsLogAnalyticsConfigured();
 
             if (!IsGuidIfPopulated(AzureClientId))
             {
                 Log.Error($"invalid client id value:{AzureClientId} expected:guid");
-                retval = false;
+                retval &= false;
             }
 
             if (!IsGuidIfPopulated(AzureSubscriptionId))
             {
                 Log.Error($"invalid subscription id value:{AzureSubscriptionId} expected:guid");
-                retval = false;
+                retval &= false;
             }
 
             if (!IsGuidIfPopulated(AzureTenantId))
             {
                 Log.Error($"invalid tenant id value:{AzureTenantId} expected:guid");
-                retval = false;
+                retval &= false;
             }
 
-            if (!string.IsNullOrEmpty(AzureKeyVault) && FileTypes.MapFileUriType(AzureKeyVault) != FileUriTypesEnum.azureKeyVaultUri)
+            if (HasValue(AzureKeyVault) && FileTypes.MapFileUriType(AzureKeyVault) != FileUriTypesEnum.azureKeyVaultUri)
             {
                 Log.Error($"invalid key vault value:{AzureKeyVault} expected:{FileUriTypesEnum.azureKeyVaultUri}");
-                retval = false;
+                retval &= false;
             }
 
-            if (needsAad)
+            if (usingAad)
             {
-                AzureResourceManager arm = new AzureResourceManager();
-                retval = arm.Authenticate();
-
-                if (clientIdConfigured & AzureManagedIdentity & !(arm.ClientIdentity.IsSystemManagedIdentity | arm.ClientIdentity.IsUserManagedIdentity))
+                if (clientIdConfigured && HasValue(AzureClientCertificate) && !HasValue(ClientCertificate))
                 {
-                    Log.Warning($"unable to detect managed identity. verify azure client configuration settings and set AzureManagedIdentity to false if not using.");
+                    ClientCertificate = certificateUtilities.GetClientCertificate(AzureClientCertificate);
+                    if (!HasValue(ClientCertificate))
+                    {
+                        Log.Error("Failed to find certificate");
+                        retval &= false;
+                    }
+                }
+
+                if (HasValue(ClientCertificate))
+                {
+                    if (!certificateUtilities.CheckCertificate(ClientCertificate))
+                    {
+                        Log.Error("Failed certificate check");
+                        retval &= false;
+                    }
+                }
+                // else
+                // {
+                //     Log.Error("Failed certificate to find certificate");
+                //     retval &= false;
+                // }
+
+                retval &= arm.Authenticate();
+
+                if (clientIdConfigured & !arm.ClientIdentity.IsTypeManagedIdentity & !arm.ClientIdentity.IsAppRegistration)
+                {
+                    Log.Warning($"unable to detect managed identity. verify azure client configuration settings and set both AzureClientId and AzureClientSecret.");
                 }
 
                 // LA workspace commands require subscription id. if not specified and tenant has more than one, fail
-                if ((LogAnalyticsCreate | LogAnalyticsRecreate) && string.IsNullOrEmpty(AzureSubscriptionId))
+                if ((LogAnalyticsCreate | LogAnalyticsRecreate) && !HasValue(AzureSubscriptionId))
                 {
                     if (arm.PopulateSubscriptions() && arm.Subscriptions.Length != 1)
                     {
                         Log.Error($"this configuration requires AzureSubscriptionId to be configured", arm.Subscriptions);
-                        retval = false;
+                        retval &= false;
                     }
                     else
                     {
@@ -624,7 +638,7 @@ namespace CollectSFData.Common
 
             if (LogAnalyticsCreate & !IsLogAnalyticsConfigured())
             {
-                if (string.IsNullOrEmpty(AzureResourceGroup) | string.IsNullOrEmpty(AzureResourceGroupLocation) | string.IsNullOrEmpty(LogAnalyticsWorkspaceName))
+                if (!HasValue(AzureResourceGroup) | !HasValue(AzureResourceGroupLocation) | !HasValue(LogAnalyticsWorkspaceName))
                 {
                     Log.Error("LogAnalyticsWorkspaceName, AzureSubscriptionId, AzureResourceGroup, and AzureResourceGroupLocation are required for LogAnalyticsCreate");
                     retval = false;
@@ -636,7 +650,7 @@ namespace CollectSFData.Common
                 LogAnalyticsName = CleanTableName(LogAnalyticsName, true);
                 Log.Info($"adding prefix to logAnalyticsName: {LogAnalyticsName}");
 
-                if (IsLogAnalyticsConfigured() & Unique & string.IsNullOrEmpty(AzureSubscriptionId))
+                if (IsLogAnalyticsConfigured() & Unique & !HasValue(AzureSubscriptionId))
                 {
                     Log.Error($"log analytics and 'Unique' require 'AzureSubscriptionId'. supply AzureSubscriptionId or set Unique to false.");
                     retval = false;
@@ -650,7 +664,7 @@ namespace CollectSFData.Common
 
                 if (IsLogAnalyticsPurgeRequested())
                 {
-                    if (string.IsNullOrEmpty(LogAnalyticsId) | string.IsNullOrEmpty(LogAnalyticsKey) | string.IsNullOrEmpty(LogAnalyticsName))
+                    if (!HasValue(LogAnalyticsId) | !HasValue(LogAnalyticsKey) | !HasValue(LogAnalyticsName))
                     {
                         Log.Error("LogAnalyticsId, LogAnalyticsKey, and LogAnalyticsName are required for LogAnalyticsPurge");
                         retval = false;
@@ -659,7 +673,7 @@ namespace CollectSFData.Common
 
                 if (LogAnalyticsRecreate)
                 {
-                    if (string.IsNullOrEmpty(LogAnalyticsId) | string.IsNullOrEmpty(LogAnalyticsKey) | string.IsNullOrEmpty(LogAnalyticsName))
+                    if (!HasValue(LogAnalyticsId) | !HasValue(LogAnalyticsKey) | !HasValue(LogAnalyticsName))
                     {
                         Log.Error("LogAnalyticsId, LogAnalyticsKey, and LogAnalyticsName are required for LogAnalyticsRecreate");
                         retval = false;
@@ -722,7 +736,7 @@ namespace CollectSFData.Common
 
         public bool ValidateSasKey()
         {
-            if (!string.IsNullOrEmpty(SasKey))
+            if (HasValue(SasKey))
             {
                 SasEndpointInfo = new SasEndpoints(SasKey);
                 return SasEndpointInfo.IsValid();
@@ -749,13 +763,13 @@ namespace CollectSFData.Common
             Log.Info("enter");
             bool retval = true;
 
-            if (string.IsNullOrEmpty(StartTimeStamp) != string.IsNullOrEmpty(EndTimeStamp))
+            if (HasValue(StartTimeStamp) != HasValue(EndTimeStamp))
             {
                 Log.Error("supply start and end time");
                 retval = false;
             }
 
-            if (!string.IsNullOrEmpty(StartTimeStamp) & !string.IsNullOrEmpty(EndTimeStamp))
+            if (HasValue(StartTimeStamp) & HasValue(EndTimeStamp))
             {
                 if (ConvertToUtcTime(StartTimeStamp) == DateTime.MinValue | ConvertToUtcTime(EndTimeStamp) == DateTime.MinValue)
                 {
@@ -824,7 +838,7 @@ namespace CollectSFData.Common
             if (!UseMemoryStream && !CacheLocation.StartsWith("\\\\"))
             {
                 DriveInfo drive = DriveInfo.GetDrives().FirstOrDefault(x => String.Equals(x.Name, Path.GetPathRoot(CacheLocation), StringComparison.OrdinalIgnoreCase));
-                if (drive != null && drive.AvailableFreeSpace < ((long)1024 * 1024 * 1024 * 100))
+                if (HasValue(drive) && drive.AvailableFreeSpace < ((long)1024 * 1024 * 1024 * 100))
                 {
                     Log.Warning($"available free space in {CacheLocation} is less than 100 GB");
                 }
@@ -839,7 +853,7 @@ namespace CollectSFData.Common
 
         private void CheckLogFile()
         {
-            if (!string.IsNullOrEmpty(LogFile))
+            if (HasValue(LogFile))
             {
                 Log.LogFile = FileManager.NormalizePath(LogFile);
                 Log.Info($"setting output log file to: {LogFile}");
@@ -1040,7 +1054,7 @@ namespace CollectSFData.Common
                     return false;
                 }
 
-                if (!string.IsNullOrEmpty(ConfigurationFile))
+                if (HasValue(ConfigurationFile))
                 {
                     foreach (string file in ConfigurationFile.Split(','))
                     {
@@ -1075,7 +1089,7 @@ namespace CollectSFData.Common
 
             try
             {
-                Log.Info($"reading {configFile}", ConsoleColor.Yellow);
+                Log.Info($"reading {Path.GetFullPath(configFile)}", ConsoleColor.Yellow);
                 options = (JObject)JsonConvert.DeserializeObject(File.ReadAllText(configFile));
                 Log.Info($"options results:", options);
                 return options;
@@ -1092,8 +1106,8 @@ namespace CollectSFData.Common
             object thisValue = propertyInstance.GetValue(this);
             Log.Debug($"checking:{propertyInstance.Name}:{thisValue} -> {instanceValue}");
 
-            if ((thisValue != null && thisValue.Equals(instanceValue))
-                | (thisValue == null & instanceValue == null))
+            if ((HasValue(thisValue) && thisValue.Equals(instanceValue))
+                | (!HasValue(thisValue) & !HasValue(instanceValue)))
             {
                 Log.Debug("value same. skipping.");
                 return;

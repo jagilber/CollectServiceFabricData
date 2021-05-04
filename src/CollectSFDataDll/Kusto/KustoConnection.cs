@@ -156,7 +156,8 @@ namespace CollectSFData.Kusto
             }
 
             string cleanUri = Regex.Replace(relativeUri, $"\\.?\\d*?({Constants.ZipExtension}|{Constants.TableExtension})", "");
-            return !_instance.FileObjects.HasFileUri(cleanUri);
+            FileObject fileObject = _instance.FileObjects.FindByUriFirstOrDefault(cleanUri);
+            return fileObject.Status != FileStatus.existing;
         }
 
         private void IngestMultipleFiles(FileObjectCollection fileObjectCollection)
@@ -249,7 +250,7 @@ namespace CollectSFData.Kusto
             {
                 string uriFile = record["IngestionSourcePath"].ToString();
                 Log.ToFile($"checking failed ingested for failed relativeuri: {uriFile}");
-                FileObject fileObject = _instance.FileObjects.FindByUri(uriFile);
+                FileObject fileObject = _instance.FileObjects.FindByUriFirstOrDefault(uriFile);
 
                 fileObject.Status = FileStatus.failed;
 
@@ -281,7 +282,7 @@ namespace CollectSFData.Kusto
             foreach (string uriFile in successUris)
             {
                 Log.ToFile($"checking ingested uri for success relativeuri: {uriFile}");
-                FileObject fileObject = _instance.FileObjects.FindByUri(uriFile);
+                FileObject fileObject = _instance.FileObjects.FindByUriFirstOrDefault(uriFile);
                 fileObject.Status = FileStatus.succeeded;
 
                 if (fileObject.IsPopulated)
@@ -322,7 +323,7 @@ namespace CollectSFData.Kusto
             queue.AddMessage(queueMessage, _messageTimeToLive, null, null, context);
             fileObject.Status = FileStatus.uploading;
             fileObject.MessageId = message.Id;
-            Log.Debug($"fileobject uploading FileUri:{fileObject.FileUri} RelativeUri: {fileObject.RelativeUri} message id: {message.Id}");
+            Log.Info($"fileobject uploading FileUri:{fileObject.FileUri} RelativeUri: {fileObject.RelativeUri} message id: {message.Id}",ConsoleColor.Cyan);
         }
 
         private KustoIngestionMessage PrepareIngestionMessage(string blobUriWithSas, long blobSizeBytes, string ingestionMapping)

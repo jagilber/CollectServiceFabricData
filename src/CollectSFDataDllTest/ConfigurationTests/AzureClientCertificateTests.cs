@@ -27,8 +27,8 @@ namespace CollectSFDataDll.ConfigurationTests
             ProcessOutput results = utils.ExecuteTest((config) =>
             {
                 config.AzureClientCertificate = GetCertBase64String();
+                config.AzureClientSecret = "";
                 config.AzureKeyVault = "";
-                config.AzureManagedIdentity = false;
                 Assert.IsTrue(config.IsClientIdConfigured(), "test configuration invalid");
                 return config.ValidateAad();
             }, utils.Collector.Config);
@@ -47,7 +47,7 @@ namespace CollectSFDataDll.ConfigurationTests
 
             ProcessOutput results = utils.ExecuteTest((config) =>
             {
-                config.AzureManagedIdentity = false;
+                config.AzureClientCertificate = "";
                 Assert.IsTrue(config.IsClientIdConfigured(), "test configuration invalid");
                 return config.ValidateAad();
             }, utils.Collector.Config);
@@ -67,7 +67,6 @@ namespace CollectSFDataDll.ConfigurationTests
             ProcessOutput results = utils.ExecuteTest((config) =>
             {
                 config.AzureClientId = "";
-                config.AzureManagedIdentity = true;
                 Assert.IsTrue(config.IsClientIdConfigured(), "test configuration invalid");
                 AzureResourceManager arm = new AzureResourceManager();
 
@@ -90,7 +89,6 @@ namespace CollectSFDataDll.ConfigurationTests
             ProcessOutput results = utils.ExecuteTest((config) =>
             {
                 //config.AzureClientId = "";
-                config.AzureManagedIdentity = true;
                 Assert.IsTrue(config.IsClientIdConfigured(), "test configuration invalid");
                 AzureResourceManager arm = new AzureResourceManager();
 
@@ -114,11 +112,12 @@ namespace CollectSFDataDll.ConfigurationTests
             {
                 AzureResourceManager arm = new AzureResourceManager();
                 string certFile = $"{TestUtilities.TempDir}\\{config.AzureClientSecret}.pfx";
-                arm.ClientCertificate.SaveCertificateToFile(_appCertificate, certFile);
+                new CertificateUtilities().SaveCertificateToFile(_appCertificate, certFile);
 
                 //config.AzureClientId = "";
                 config.AzureClientCertificate = certFile;
                 config.AzureKeyVault = "";
+                config.AzureClientSecret = "";
                 Assert.IsTrue(config.IsClientIdConfigured(), "test configuration invalid");
                 return config.ValidateAad();
             }, utils.Collector.Config);
@@ -140,6 +139,7 @@ namespace CollectSFDataDll.ConfigurationTests
                 //config.AzureClientId = "";
                 config.AzureClientCertificate = _appCertificate.Subject;
                 config.AzureKeyVault = "";
+                config.AzureClientSecret = "";
                 Assert.IsTrue(config.IsClientIdConfigured(), "test configuration invalid");
                 return config.ValidateAad();
             }, utils.Collector.Config);
@@ -161,6 +161,7 @@ namespace CollectSFDataDll.ConfigurationTests
                 //config.AzureClientId = "";
                 config.AzureClientCertificate = _appCertificate.Thumbprint;
                 config.AzureKeyVault = "";
+                config.AzureClientSecret = "";
                 Assert.IsTrue(config.IsClientIdConfigured(), "test configuration invalid");
                 return config.ValidateAad();
             }, utils.Collector.Config);
@@ -201,9 +202,10 @@ namespace CollectSFDataDll.ConfigurationTests
 
             ProcessOutput results = utils.ExecuteTest((config) =>
             {
-                //config.AzureClientId = "";
-                config.AzureClientCertificate = "";
-                config.ClientCertificate = _appCertificate;
+                CertificateUtilities certificateUtilities = new CertificateUtilities();
+                certificateUtilities.SetSecurePassword(TestUtilities.TestProperties.testAdminPassword);
+
+                config.ClientCertificate = certificateUtilities.GetClientCertificate(TestUtilities.TestProperties.AzureClientCertificate);// _appCertificate;
                 config.AzureKeyVault = "";
                 Assert.IsTrue(config.IsClientIdConfigured(), "test configuration invalid");
                 return config.ValidateAad();
@@ -224,16 +226,17 @@ namespace CollectSFDataDll.ConfigurationTests
         private TestUtilities DefaultUtilities()
         {
             TestUtilities utils = new TestUtilities();
+            CertificateUtilities certificateUtilities = new CertificateUtilities();
             ConfigurationOptions config = utils.Collector.Config;
             // verify test credentials work
             AzureResourceManager arm = new AzureResourceManager();
-            _appCertificate = arm.ClientCertificate.ReadCertificate(TestUtilities.TestProperties.AzureClientCertificate);
+            _appCertificate = certificateUtilities.GetClientCertificate(TestUtilities.TestProperties.AzureClientCertificate);
             //_appCertificate = new X509Certificate2(Convert.FromBase64String(TestUtilities.TestProperties.AzureClientCertificate),
             //    TestUtilities.TestProperties.adminPassword,
             //    X509KeyStorageFlags.Exportable);
             Assert.IsNotNull(_appCertificate);
 
-            _clientCertificate = arm.ClientCertificate.ReadCertificate(TestUtilities.TestProperties.testAzClientCertificate);
+            _clientCertificate = certificateUtilities.GetClientCertificate(TestUtilities.TestProperties.testAzClientCertificate);
             //_clientCertificate = new X509Certificate2(Convert.FromBase64String(TestUtilities.TestProperties.testAzClientCertificate),
             //    TestUtilities.TestProperties.adminPassword,
             //    X509KeyStorageFlags.Exportable);
@@ -244,7 +247,7 @@ namespace CollectSFDataDll.ConfigurationTests
             config.AzureSubscriptionId = TestUtilities.TestProperties.AzureSubscriptionId;
             config.AzureTenantId = TestUtilities.TestProperties.AzureTenantId;
 
-            config.AzureClientSecret = TestUtilities.TestProperties.AzureClientSecret;
+            // config.AzureClientSecret = TestUtilities.TestProperties.AzureClientSecret;
             config.AzureClientId = TestUtilities.TestProperties.testAzClientId;
             config.AzureClientCertificate = TestUtilities.TestProperties.testAzClientCertificate;
 
