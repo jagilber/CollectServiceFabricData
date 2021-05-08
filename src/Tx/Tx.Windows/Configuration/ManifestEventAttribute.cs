@@ -15,6 +15,7 @@ namespace Tx.Windows
         private readonly string _level;
         private readonly string _opcode;
         private readonly Guid _providerGuid;
+        private readonly string _task;
         private readonly byte _version;
 
         public ManifestEventAttribute(string providerGuid, uint eventId, byte version)
@@ -26,6 +27,18 @@ namespace Tx.Windows
 
         public ManifestEventAttribute(string providerGuid, uint eventId, byte version,
                                       string opcode, string level, string channel, params string[] keywords)
+        {
+            _providerGuid = new Guid(providerGuid);
+            _eventId = eventId;
+            _version = version;
+            _opcode = opcode;
+            _level = level;
+            _channel = channel;
+            _keywords = keywords;
+        }
+
+        public ManifestEventAttribute(string providerGuid, uint eventId, byte version,
+                                      string opcode, string level, string channel, string task, params string[] keywords)
         {
             _providerGuid = new Guid(providerGuid);
             _eventId = eventId;
@@ -66,6 +79,11 @@ namespace Tx.Windows
             get { return _channel; }
         }
 
+        public string Task
+        {
+            get { return _task; }
+        }
+
         public string[] Keywords
         {
             get { return _keywords; }
@@ -84,6 +102,8 @@ namespace Tx.Windows
             sb.AppendLine(_level);
             sb.Append("Channel: ");
             sb.AppendLine(_channel);
+            sb.Append("Task: ");
+            sb.AppendLine(_task);
             sb.AppendLine("Keywords: ");
             foreach (string keyword in _keywords)
             {
