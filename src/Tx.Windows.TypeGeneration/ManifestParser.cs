@@ -159,11 +159,10 @@ using System;");
                                 version);
                 sb.AppendLine();
 
-                sb.AppendFormat("    \"{0}\", \"{1}\", \"{2}\", \"{3}\"",
+                sb.AppendFormat("    \"{0}\", \"{1}\", \"{2}\"",
                                 LookupOpcodeName(evt, opcodes),
                                 LookupLevel(evt),
-                                LookupChannelName(evt, channels), 
-                                LookupTaskName(evt));
+                                LookupChannelName(evt, channels));
 
                 foreach (string keyword in LookupKeywords(evt, keywords))
                 {
