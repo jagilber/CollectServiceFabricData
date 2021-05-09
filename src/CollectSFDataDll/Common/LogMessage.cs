@@ -21,13 +21,13 @@ namespace CollectSFData.Common
             set
             {
                 // set fallback for any non printable characters
-                _message = Encoding.UTF8.GetString(
-                    Encoding.Convert(Encoding.UTF8, Encoding.GetEncoding(
-                                Encoding.UTF8.EncodingName,
+                _message = Encoding.Unicode.GetString(
+                    Encoding.Convert(Encoding.Unicode, Encoding.GetEncoding(
+                                Encoding.Unicode.EncodingName,
                                 new EncoderReplacementFallback(string.Empty),
                                 new DecoderExceptionFallback()
                             ),
-                        Encoding.UTF8.GetBytes(value)
+                        Encoding.Unicode.GetBytes(value)
                     )
                 );
             }
