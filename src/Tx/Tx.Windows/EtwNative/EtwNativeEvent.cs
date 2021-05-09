@@ -272,6 +272,12 @@ namespace Tx.Windows
         {
             long value = *((long*) _data);
             _data += sizeof (long);
+
+            if(value > DateTime.MaxValue.Ticks || value < DateTime.MinValue.Ticks)
+            {
+                return new DateTime();
+            }
+
             return DateTime.FromFileTimeUtc(value);
         }
 
