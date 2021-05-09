@@ -10,7 +10,9 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -296,7 +298,8 @@ namespace CollectSFData.DataFile
             fileObject.Stream.SaveToFile();
             DeleteFile(outputFile);
             Log.Info($"Writing {outputFile}");
-            result = TxEtl(fileObject, outputFile);
+            result = TxEtlPlayback(fileObject, outputFile);
+            //result = TxEtl(fileObject, outputFile);
 
             if (result)
             {
@@ -431,7 +434,7 @@ namespace CollectSFData.DataFile
 
             int totalMs = (int)(DateTime.Now - startTime).TotalMilliseconds;
             int recordsCount = observer.Records.Count;
-            double recordsPerSecond = recordsCount /(totalMs * .001);
+            double recordsPerSecond = recordsCount / (totalMs * .001);
             Log.Info($"complete:{waitResult} total ms:{totalMs} total records:{recordsCount} records per second:{recordsPerSecond}");
             return observer;
         }
@@ -630,6 +633,73 @@ namespace CollectSFData.DataFile
             return true;
         }
 
+        private bool TxEtlPlayback(FileObject fileObject, string outputFile)
+        {
+            DateTime startTime = DateTime.Now;
+            IObservable<SystemEvent> observable = default(IObservable<SystemEvent>);
+            TraceObserver<EtwNativeEvent> traceSession = default(TraceObserver<EtwNativeEvent>);
+            List<DtrTraceRecord> csvRecords = new List<DtrTraceRecord>();
+
+            // todo: verify if needed for etl...testing pdh found invalid data when using concurrently
+            // lock (_lockObj)
+            // {
+            Log.Info($"observable creating: {fileObject.FileUri}");
+
+            Playback playback = new Playback();
+            playback.AddEtlFiles(fileObject.FileUri);
+            var sfTypes = from t in Assembly.GetExecutingAssembly().GetTypes()
+                          where t.IsClass && t.Namespace != null && t.Namespace.Contains("Microsoft_ServiceFabric")
+                          select t;
+            //q.ToList().ForEach(t => Console.WriteLine(t.Name));
+            playback.KnownTypes = sfTypes.ToArray();// = Microsoft_ServiceFabric.GetType().GetProperties();
+            
+            
+            //var results = playback.GetAll(sfTypes.ToArray());
+            
+            //IObservable<SystemEvent> all = playback.GetObservable<SystemEvent>();
+            //   Observer o = Observer.Create((type)=>{
+
+            //   });     
+            //TraceObserver<T> observer = new TraceObserver<T>();
+            //observable.Subscribe(observer);
+            //playback.Run();
+            //Log.Info($"finished total ms: {DateTime.Now.Subtract(startTime).TotalMilliseconds} reading: {fileObject.FileUri}");
+            playback.EndTime = Config.EndTimeUtc.UtcDateTime;
+            playback.StartTime = Config.StartTimeUtc.UtcDateTime;
+            IObservable<Timestamped<object>> results = playback.GetAll(sfTypes.ToArray());
+            //Log.Info($"finished:results{results.Count().Wait()} total ms: {DateTime.Now.Subtract(startTime).TotalMilliseconds} reading: {fileObject.FileUri}");
+            //playback.KnownTypes.Append(Microsoft_ServiceFabric);
+
+            Log.Info($"observable created: {fileObject.FileUri}");
+            int count = 0;
+            // using (all.Count().Subscribe((output) => Log.Info("output",output)))
+            // {
+            //      playback.Run();
+            //      Log.Info($"finished count:total count:{count} total ms:{DateTime.Now.Subtract(startTime).TotalMilliseconds} reading:{fileObject.FileUri}");
+            // }
+
+            // all = playback.GetObservable<SystemEvent>();
+            using (results.Subscribe((output) => 
+                    {
+                        count++;
+                        Log.ToFile($"output:{output.ToString()}",output);
+                    }
+                ))
+             {
+                 playback.Run();
+                 Log.Info($"finished:total count:{count} total ms:{DateTime.Now.Subtract(startTime).TotalMilliseconds} reading:{fileObject.FileUri}");
+                 //Console.ReadLine();
+             }
+
+            Log.Debug($"finished total ms: {DateTime.Now.Subtract(startTime).TotalMilliseconds} reading: {fileObject.FileUri}");
+            //    records = traceSession.Records;
+
+            //fileObject.Stream.Write(results);
+            Log.Info($"records: {traceSession.Records.Count()} {csvRecords.Count}");
+            traceSession.Dispose();
+            playback.Dispose();
+            return true;
+        }
         private bool TxEtl(FileObject fileObject, string outputFile)
         {
             // this forces blg output timestamps to use local capture timezone which is utc for azure
@@ -644,16 +714,16 @@ namespace CollectSFData.DataFile
             List<DtrTraceRecord> csvRecords = new List<DtrTraceRecord>();
 
             // todo: verify if needed for etl...testing pdh found invalid data when using concurrently
-           // lock (_lockObj)
-           // {
-                Log.Debug($"observable creating: {fileObject.FileUri}");
-                observable = EtwObservable.FromFiles(fileObject.FileUri);
+            // lock (_lockObj)
+            // {
+            Log.Debug($"observable creating: {fileObject.FileUri}");
+            observable = EtwObservable.FromFiles(fileObject.FileUri);
 
-                Log.Debug($"observable created: {fileObject.FileUri}");
-                traceSession = ReadTraceRecords(observable);
-                Log.Debug($"finished total ms: {DateTime.Now.Subtract(startTime).TotalMilliseconds} reading: {fileObject.FileUri}");
+            Log.Debug($"observable created: {fileObject.FileUri}");
+            traceSession = ReadTraceRecords(observable);
+            Log.Debug($"finished total ms: {DateTime.Now.Subtract(startTime).TotalMilliseconds} reading: {fileObject.FileUri}");
             //    records = traceSession.Records;
-           // }
+            // }
 
             //foreach (EtwNativeEvent record in records)
             foreach (EtwNativeEvent record in traceSession.Records)
