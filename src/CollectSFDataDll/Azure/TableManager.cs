@@ -15,34 +15,42 @@ using System.Threading.Tasks;
 
 namespace CollectSFData.Azure
 {
-    public class TableManager : Constants
+    public class TableManager
     {
-        private readonly CustomTaskManager _tableTasks = new CustomTaskManager(true);
-        private Instance _instance = Instance.Singleton();
+        private readonly CustomTaskManager _tableTasks = new CustomTaskManager();
+        private ConfigurationOptions _config;
+        private Instance _instance;
         private CloudTableClient _tableClient;
-        private ConfigurationOptions Config => _instance.Config;
+
         public Action<FileObject> IngestCallback { get; set; }
+
         public List<CloudTable> TableList { get; set; } = new List<CloudTable>();
+
+        public TableManager(Instance instance)
+        {
+            _instance = instance ?? throw new ArgumentNullException(nameof(instance));
+            _config = _instance.Config;
+        }
 
         public bool Connect()
         {
             TableContinuationToken tableToken = null;
             CancellationToken cancellationToken = new CancellationToken();
 
-            if (!Config.SasEndpointInfo.IsPopulated())
+            if (!_config.SasEndpointInfo.IsPopulated())
             {
-                Log.Warning("no table or token info. exiting:", Config.SasEndpointInfo);
+                Log.Warning("no table or token info. exiting:", _config.SasEndpointInfo);
                 return false;
             }
 
             try
             {
-                CloudTable table = new CloudTable(new Uri(Config.SasEndpointInfo.TableEndpoint + Config.SasEndpointInfo.SasToken));
+                CloudTable table = new CloudTable(new Uri(_config.SasEndpointInfo.TableEndpoint + _config.SasEndpointInfo.SasToken));
                 _tableClient = table.ServiceClient;
 
                 TableResultSegment tables = _tableClient.ListTablesSegmentedAsync(
                     null,
-                    MaxResults,
+                    Constants.MaxResults,
                     tableToken,
                     new TableRequestOptions(),
                     null,
@@ -63,14 +71,14 @@ namespace CollectSFData.Azure
             Log.Info($"enumerating tables: with prefix {tablePrefix}");
             int resultsCount = 0;
             TableContinuationToken token = new TableContinuationToken();
-            tablePrefix = string.IsNullOrEmpty(Config.UriFilter) ? tablePrefix : Config.UriFilter;
+            tablePrefix = string.IsNullOrEmpty(_config.UriFilter) ? tablePrefix : _config.UriFilter;
 
             while (token != null)
             {
                 try
                 {
-                    Task<TableResultSegment> tableSegment = _tableClient.ListTablesSegmentedAsync(tablePrefix, MaxResults, token, null, null);
-                    Task<TableResultSegment> task = DownloadTablesSegment(tableSegment, Config.ContainerFilter);
+                    Task<TableResultSegment> tableSegment = _tableClient.ListTablesSegmentedAsync(tablePrefix, Constants.MaxResults, token, null, null);
+                    Task<TableResultSegment> task = DownloadTablesSegment(tableSegment, _config.ContainerFilter);
 
                     token = task.Result.ContinuationToken;
                     resultsCount += task.Result.Results.Count;
@@ -133,7 +141,7 @@ namespace CollectSFData.Azure
                     {
                         Log.Warning("there is more than one blob table (service fabric deployment) containing records in configured time range. not setting container prefix:", tableGuids.Distinct());
                         Log.Warning("for quicker enumeration, ctrl-c to quit and use --containerFilter argument to specify correct blob.");
-                        Thread.Sleep(ThreadSleepMsWarning);
+                        Thread.Sleep(Constants.ThreadSleepMsWarning);
                         clusterId = null;
                     }
                 }
@@ -157,7 +165,7 @@ namespace CollectSFData.Azure
             return tableSegment;
         }
 
-        private IEnumerable<List<CsvTableRecord>> EnumerateTable(CloudTable cloudTable, int maxResults = TableMaxResults, bool limitResults = false)
+        private IEnumerable<List<CsvTableRecord>> EnumerateTable(CloudTable cloudTable, int maxResults = Constants.TableMaxResults, bool limitResults = false)
         {
             Log.Info($"enumerating table: {cloudTable.Name}", ConsoleColor.Yellow);
             TableContinuationToken token = new TableContinuationToken();
@@ -207,23 +215,30 @@ namespace CollectSFData.Azure
             {
                 int chunkCount = 0;
 
-                foreach (IList<CsvTableRecord> resultsChunk in EnumerateTable(cloudTable, TableMaxResults))
+                foreach (IList<CsvTableRecord> resultsChunk in EnumerateTable(cloudTable, Constants.TableMaxResults))
                 {
                     if (resultsChunk.Count < 1)
                     {
                         continue;
                     }
 
-                    if (Config.List)
+                    if (_config.List)
                     {
                         Log.Info($"cloudtable: {cloudTable.Name} results: {resultsChunk.Count}");
                         continue;
                     }
 
-                    string relativeUri = $"{Config.StartTimeUtc.Ticks}-{Config.EndTimeUtc.Ticks}-{cloudTable.Name}.{chunkCount++}{TableExtension}";
-                    FileObject fileObject = new FileObject(relativeUri, Config.CacheLocation);
-                    resultsChunk.ToList().ForEach(x => x.RelativeUri = relativeUri);
+                    string relativeUri = $"{_config.StartTimeUtc.Ticks}-{_config.EndTimeUtc.Ticks}-{cloudTable.Name}.{chunkCount++}{Constants.TableExtension}";
+                    FileObject fileObject = new FileObject(relativeUri, _config.CacheLocation) { Status = FileStatus.enumerated };
 
+                    if (_instance.FileObjects.FindByUriFirstOrDefault(relativeUri).Status == FileStatus.existing)
+                    {
+                        Log.Info($"{relativeUri} already exists. skipping", ConsoleColor.DarkYellow);
+                        continue;
+                    }
+
+                    _instance.FileObjects.Add(fileObject);
+                    resultsChunk.ToList().ForEach(x => x.RelativeUri = relativeUri);
                     fileObject.Stream.Write(resultsChunk);
 
                     _instance.TotalFilesDownloaded++;
@@ -256,7 +271,7 @@ namespace CollectSFData.Azure
                         try
                         {
                             // subtract rowkey prefix (ticks) from ticks maxvalue to get actual time
-                            actualTimeStamp = new DateTime(DateTime.MaxValue.Ticks - Convert.ToInt64(result.RowKey.Substring(0, result.RowKey.IndexOf("_")))).ToString(DateTimeFormat);
+                            actualTimeStamp = new DateTime(DateTime.MaxValue.Ticks - Convert.ToInt64(result.RowKey.Substring(0, result.RowKey.IndexOf("_")))).ToString(Constants.DateTimeFormat);
                         }
                         catch (Exception e)
                         {
@@ -274,7 +289,7 @@ namespace CollectSFData.Azure
                         PropertyName = entity.Key,
                         PropertyValue = $"\"{entity.Value.Trim('"').Replace("\"", "'")}\"",
                         RelativeUri = cloudTable.Name,
-                        ResourceUri = Config.ResourceUri
+                        ResourceUri = _config.ResourceUri
                     });
                 }
             }
@@ -282,14 +297,14 @@ namespace CollectSFData.Azure
             return results;
         }
 
-        private TableQuery GenerateTimeQuery(int maxResults = TableMaxResults)
+        private TableQuery GenerateTimeQuery(int maxResults = Constants.TableMaxResults)
         {
             TableQuery query = new TableQuery();
-            string startDate = TableQuery.GenerateFilterConditionForDate("Timestamp", QueryComparisons.GreaterThanOrEqual, Config.StartTimeUtc);
-            string endDate = TableQuery.GenerateFilterConditionForDate("Timestamp", QueryComparisons.LessThanOrEqual, Config.EndTimeUtc);
+            string startDate = TableQuery.GenerateFilterConditionForDate("Timestamp", QueryComparisons.GreaterThanOrEqual, _config.StartTimeUtc);
+            string endDate = TableQuery.GenerateFilterConditionForDate("Timestamp", QueryComparisons.LessThanOrEqual, _config.EndTimeUtc);
 
             query.FilterString = TableQuery.CombineFilters(startDate, TableOperators.And, endDate);
-            query.TakeCount = Math.Min(maxResults, MaxResults);
+            query.TakeCount = Math.Min(maxResults, Constants.MaxResults);
             Log.Info("query string:", ConsoleColor.Cyan, null, query);
 
             return query;
@@ -319,7 +334,7 @@ namespace CollectSFData.Azure
 
                     case EdmType.DateTime:
                         entity = prop.Value.DateTime;
-                        entityString = Convert.ToDateTime(entity).ToString(DateTimeFormat);
+                        entityString = Convert.ToDateTime(entity).ToString(Constants.DateTimeFormat);
                         break;
 
                     case EdmType.Double:

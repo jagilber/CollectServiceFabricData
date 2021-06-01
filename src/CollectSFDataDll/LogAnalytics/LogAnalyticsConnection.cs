@@ -20,22 +20,29 @@ using System.Threading;
 
 namespace CollectSFData.LogAnalytics
 {
-    public class LogAnalyticsConnection : Constants
+    public class LogAnalyticsConnection
     {
-        private readonly AzureResourceManager _arm = new AzureResourceManager();
-        private readonly AzureResourceManager _laArm = new AzureResourceManager();
+        private readonly AzureResourceManager _arm;
+        private readonly AzureResourceManager _laArm;
         private string _armAuthResource = "https://management.core.windows.net";
+        private ConfigurationOptions _config;
         private LogAnalyticsWorkspaceModel _currentWorkspaceModelModel = new LogAnalyticsWorkspaceModel();
         private Http _httpClient = Http.ClientFactory();
-        private SynchronizedList<string> _ingestedUris = new SynchronizedList<string>();
-        private Instance _instance = Instance.Singleton();
+        private Instance _instance;
         private string _logAnalyticsApiVer = "api-version=2020-08-01";
         private string _logAnalyticsAuthResource = "https://api.loganalytics.io";
         private string _logAnalyticsCustomLogSuffix = ".ods.opinsights.azure.com/api/logs?api-version=2016-04-01";
         private string _logAnalyticsQueryEndpoint = "https://api.loganalytics.io/v1/workspaces/";
         private string _timeStampField = "";
-        private ConfigurationOptions Config => _instance.Config;
         private LogAnalyticsWorkspaceRecordResult CurrentWorkspace { get; set; }
+
+        public LogAnalyticsConnection(Instance instance)
+        {
+            _instance = instance ?? throw new ArgumentNullException(nameof(instance));
+            _config = _instance.Config;
+            _arm = new AzureResourceManager(_config);
+            _laArm = new AzureResourceManager(_config);
+        }
 
         public void AddFile(FileObject fileObject)
         {
@@ -52,40 +59,43 @@ namespace CollectSFData.LogAnalytics
 
         public bool Connect()
         {
-            if (Config.LogAnalyticsCreate | Config.LogAnalyticsRecreate | Config.Unique)
+            if (_config.LogAnalyticsCreate | _config.LogAnalyticsRecreate | _config.Unique)
             {
                 Authenticate();
                 GetCurrentWorkspace();
 
-                if (Config.LogAnalyticsRecreate)
+                if (_config.LogAnalyticsRecreate)
                 {
                     return RecreateWorkspace();
                 }
 
-                if (Config.LogAnalyticsCreate)
+                if (_config.LogAnalyticsCreate)
                 {
                     return CreateWorkspace();
                 }
 
-                if (Config.Unique)
+                if (_config.Unique)
                 {
-                    _ingestedUris.AddRange(PostQueryList($"['{Config.LogAnalyticsName}_CL']|distinct RelativeUri_s", false)
-                        .Select(x => x = Path.GetFileNameWithoutExtension(x)));
-                    Log.Info($"listResults:", _ingestedUris);
+                    List<string> existingUploads = PostQueryList($"['{_config.LogAnalyticsName}_CL']|distinct RelativeUri_s", false).Select(x => x = Path.GetFileNameWithoutExtension(x)).ToList();
+                    Log.Info($"listResults:", existingUploads);
+                    foreach (string existingUpload in existingUploads)
+                    {
+                        _instance.FileObjects.Add(new FileObject(existingUpload) { Status = FileStatus.existing });
+                    }
                 }
             }
 
             // send empty object to check connection
             FileObject fileObject = new FileObject();
             fileObject.Stream.Set(Encoding.UTF8.GetBytes("{}"));
-            Log.Info($"Checking connection to log analytics workspace {Config.LogAnalyticsId} ", ConsoleColor.Green);
+            Log.Info($"Checking connection to log analytics workspace {_config.LogAnalyticsId} ", ConsoleColor.Green);
 
             if (!PostData(fileObject, true))
             {
                 return false;
             }
 
-            if (Config.IsLogAnalyticsPurgeRequested())
+            if (_config.IsLogAnalyticsPurgeRequested())
             {
                 _arm.Authenticate();
                 Purge();
@@ -101,7 +111,7 @@ namespace CollectSFData.LogAnalytics
             {
                 _arm.Scopes = new List<string>() { $"{_armAuthResource}//user_impersonation" };
 
-                if (Config.IsClientIdConfigured())
+                if (_config.IsClientIdConfigured())
                 {
                     _arm.Scopes = new List<string>() { $"{_armAuthResource}//.default" };
                 }
@@ -113,7 +123,7 @@ namespace CollectSFData.LogAnalytics
             {
                 _laArm.Scopes = new List<string>() { $"{_logAnalyticsAuthResource}//user_impersonation" };
 
-                if (Config.IsClientIdConfigured())
+                if (_config.IsClientIdConfigured())
                 {
                     _laArm.Scopes = new List<string>() { $"{_logAnalyticsAuthResource}//.default" };
                 }
@@ -124,9 +134,9 @@ namespace CollectSFData.LogAnalytics
 
         private string BuildSignature(string datestring, byte[] jsonBytes)
         {
-            if (jsonBytes.Length > MaxJsonTransmitBytes | jsonBytes.Length == 0)
+            if (jsonBytes.Length > Constants.MaxJsonTransmitBytes | jsonBytes.Length == 0)
             {
-                string errMessage = $"json size too large to send or 0 bytes. max bytes that can be sent: {MaxJsonTransmitBytes} current json bytes: {jsonBytes.Length}";
+                string errMessage = $"json size too large to send or 0 bytes. max bytes that can be sent: {Constants.MaxJsonTransmitBytes} current json bytes: {jsonBytes.Length}";
                 Log.Exception(errMessage);
                 throw new ArgumentOutOfRangeException(errMessage);
             }
@@ -134,13 +144,13 @@ namespace CollectSFData.LogAnalytics
             string stringToHash = "POST\n" + jsonBytes.Length + "\napplication/json\n" + "x-ms-date:" + datestring + "\n/api/logs";
             Log.Debug($"stringToHash:{stringToHash}");
             ASCIIEncoding encoding = new ASCIIEncoding();
-            byte[] keyByte = Convert.FromBase64String(Config.LogAnalyticsKey);
+            byte[] keyByte = Convert.FromBase64String(_config.LogAnalyticsKey);
             byte[] messageBytes = encoding.GetBytes(stringToHash);
 
             using (HMACSHA256 hmacsha256 = new HMACSHA256(keyByte))
             {
                 byte[] hash = hmacsha256.ComputeHash(messageBytes);
-                string signature = "SharedKey " + Config.LogAnalyticsId + ":" + Convert.ToBase64String(hash);
+                string signature = "SharedKey " + _config.LogAnalyticsId + ":" + Convert.ToBase64String(hash);
                 Log.Debug($"signature:{signature}");
                 return signature;
             }
@@ -148,13 +158,14 @@ namespace CollectSFData.LogAnalytics
 
         private bool CanIngest(string relativeUri)
         {
-            if (!Config.Unique)
+            if (!_config.Unique)
             {
                 return true;
             }
 
-            string cleanUri = Regex.Replace(relativeUri, $"\\.?\\d*?({ZipExtension}|{TableExtension})", "");
-            return !_ingestedUris.Any(x => x.Contains(cleanUri));
+            string cleanUri = Regex.Replace(relativeUri, $"\\.?\\d*?({Constants.ZipExtension}|{Constants.TableExtension})", "");
+            FileObject fileObject = _instance.FileObjects.FindByUriFirstOrDefault(cleanUri);
+            return fileObject.Status != FileStatus.existing;
         }
 
         private bool CreateWorkspace(LogAnalyticsWorkspaceModel workspaceModel = null)
@@ -163,28 +174,28 @@ namespace CollectSFData.LogAnalytics
             bool response = false;
 
             // create workspaceModel
-            Log.Info($"creating workspaceModel {Config.LogAnalyticsWorkspaceName}");
+            Log.Info($"creating workspaceModel {_config.LogAnalyticsWorkspaceName}");
 
-            if (Config.LogAnalyticsCreate)
+            if (_config.LogAnalyticsCreate)
             {
-                _arm.CreateResourceGroup($"/subscriptions/{Config.AzureSubscriptionId}/resourcegroups/{Config.AzureResourceGroup}", Config.AzureResourceGroupLocation);
+                _arm.CreateResourceGroup($"/subscriptions/{_config.AzureSubscriptionId}/resourcegroups/{_config.AzureResourceGroup}", _config.AzureResourceGroupLocation);
             }
 
-            string resourceId = $"/subscriptions/{Config.AzureSubscriptionId}/resourcegroups/{Config.AzureResourceGroup}/providers/Microsoft.OperationalInsights/workspaces/{Config.LogAnalyticsWorkspaceName}";
+            string resourceId = $"/subscriptions/{_config.AzureSubscriptionId}/resourcegroups/{_config.AzureResourceGroup}/providers/Microsoft.OperationalInsights/workspaces/{_config.LogAnalyticsWorkspaceName}";
 
             if (workspaceModel == null)
             {
                 Log.Info("creating default workspaceModel");
                 workspaceModel = new LogAnalyticsWorkspaceModel()
                 {
-                    location = Config.AzureResourceGroupLocation,
+                    location = _config.AzureResourceGroupLocation,
                     properties = new LogAnalyticsWorkspaceModel.Properties()
                     {
-                        retentionInDays = Config.LogAnalyticsWorkspaceSku.ToLower() == "free" ? 7 : 30,
+                        retentionInDays = _config.LogAnalyticsWorkspaceSku.ToLower() == "free" ? 7 : 30,
                         source = "Azure",
                         sku = new LogAnalyticsWorkspaceModel.Properties.Sku()
                         {
-                            name = Config.LogAnalyticsWorkspaceSku
+                            name = _config.LogAnalyticsWorkspaceSku
                         }
                     }
                 };
@@ -200,7 +211,7 @@ namespace CollectSFData.LogAnalytics
             response = GetCurrentWorkspace(JsonConvert.DeserializeObject<LogAnalyticsWorkspaceRecordResult>(http.ResponseStreamString).properties.customerId);
 
             // set new key
-            Config.LogAnalyticsKey = GetWorkspacePrimaryKey();
+            _config.LogAnalyticsKey = GetWorkspacePrimaryKey();
             return response;
         }
 
@@ -209,19 +220,19 @@ namespace CollectSFData.LogAnalytics
             Log.Info("enter");
             Log.Warning($"deleting workspaceModel {CurrentWorkspace.id}");
             Log.Warning("Ctrl-C now if this is incorrect!");
-            Thread.Sleep(ThreadSleepMsWarning);
+            Thread.Sleep(Constants.ThreadSleepMsWarning);
 
             // delete workspaceModel
-            string url = $"{ManagementAzureCom}{CurrentWorkspace.id}?{_logAnalyticsApiVer}";
+            string url = $"{Constants.ManagementAzureCom}{CurrentWorkspace.id}?{_logAnalyticsApiVer}";
             return _arm.SendRequest(url, HttpMethod.Delete).Success;
         }
 
         private bool GetCurrentWorkspace(string workspaceId = null)
         {
             Log.Info("enter");
-            string url = $"{ManagementAzureCom}/subscriptions/{Config.AzureSubscriptionId}/providers/Microsoft.OperationalInsights/workspaces?{_logAnalyticsApiVer}";
+            string url = $"{Constants.ManagementAzureCom}/subscriptions/{_config.AzureSubscriptionId}/providers/Microsoft.OperationalInsights/workspaces?{_logAnalyticsApiVer}";
             Http http = _arm.SendRequest(url);
-            workspaceId = workspaceId ?? Config.LogAnalyticsId;
+            workspaceId = workspaceId ?? _config.LogAnalyticsId;
 
             LogAnalyticsWorkspaceRecordResult[] workspaces = (JsonConvert.DeserializeObject<LogAnalyticsWorkspaceRecordResults>(http.ResponseStreamString)).value.ToArray();
             CurrentWorkspace = workspaces.FirstOrDefault(x => x.properties.customerId == workspaceId);
@@ -229,9 +240,9 @@ namespace CollectSFData.LogAnalytics
             Log.Info("current workspaceModel:", ConsoleColor.Green, null, CurrentWorkspace);
             if (CurrentWorkspace != null)
             {
-                Config.AzureResourceGroupLocation = Config.AzureResourceGroupLocation ?? CurrentWorkspace.location;
-                Config.LogAnalyticsWorkspaceName = Config.LogAnalyticsWorkspaceName ?? CurrentWorkspace.name;
-                Config.LogAnalyticsId = CurrentWorkspace.properties.customerId;
+                _config.AzureResourceGroupLocation = _config.AzureResourceGroupLocation ?? CurrentWorkspace.location;
+                _config.LogAnalyticsWorkspaceName = _config.LogAnalyticsWorkspaceName ?? CurrentWorkspace.name;
+                _config.LogAnalyticsId = CurrentWorkspace.properties.customerId;
                 _currentWorkspaceModelModel = GetCurrentWorkspaceModel();
             }
 
@@ -264,7 +275,7 @@ namespace CollectSFData.LogAnalytics
 
         private string GetWorkspacePrimaryKey()
         {
-            string url = $"{ManagementAzureCom}{CurrentWorkspace.id}/sharedKeys?{_logAnalyticsApiVer}";
+            string url = $"{Constants.ManagementAzureCom}{CurrentWorkspace.id}/sharedKeys?{_logAnalyticsApiVer}";
             Http http = _arm.SendRequest(url, HttpMethod.Post);
 
             if (http.Success)
@@ -284,17 +295,17 @@ namespace CollectSFData.LogAnalytics
         {
             int retry = 0;
 
-            if (fileObject.Stream.Length < 1 && (!fileObject.FileUri.ToLower().EndsWith(JsonExtension) | !fileObject.Exists))
+            if (fileObject.Stream.Length < 1 && (!fileObject.FileUri.ToLower().EndsWith(Constants.JsonExtension) | !fileObject.Exists))
             {
                 Log.Warning($"no json data to send: {fileObject.FileUri}");
                 return;
             }
 
-            while (!PostData(fileObject) & retry++ < RetryCount)
+            while (!PostData(fileObject) & retry++ < Constants.RetryCount)
             {
                 Log.Error($"error importing: {fileObject.FileUri} retry:{retry}");
 
-                if (retry == 1 && Config.LogDebug >= LoggingLevel.Verbose)
+                if (retry == 1 && _config.LogDebug >= LoggingLevel.Verbose)
                 {
                     File.WriteAllBytes(fileObject.FileUri, fileObject.Stream.Get().ToArray());
                     Log.Error($"json saved to {fileObject.FileUri}");
@@ -314,9 +325,9 @@ namespace CollectSFData.LogAnalytics
             if (Regex.IsMatch(workspaceResourceId, pattern))
             {
                 Match match = Regex.Match(workspaceResourceId, pattern);
-                Config.AzureSubscriptionId = Config.AzureSubscriptionId ?? match.Groups["subscriptionId"].Value;
-                Config.AzureResourceGroup = Config.AzureResourceGroup ?? match.Groups["resourceGroup"].Value;
-                Config.LogAnalyticsWorkspaceName = Config.LogAnalyticsWorkspaceName ?? match.Groups["workspaceName"].Value;
+                _config.AzureSubscriptionId = _config.AzureSubscriptionId ?? match.Groups["subscriptionId"].Value;
+                _config.AzureResourceGroup = _config.AzureResourceGroup ?? match.Groups["resourceGroup"].Value;
+                _config.LogAnalyticsWorkspaceName = _config.LogAnalyticsWorkspaceName ?? match.Groups["workspaceName"].Value;
                 return true;
             }
 
@@ -327,7 +338,8 @@ namespace CollectSFData.LogAnalytics
         private bool PostData(FileObject fileObject, bool connectivityCheck = false)
         {
             Log.Debug("enter");
-            string jsonBody = Config.UseMemoryStream || connectivityCheck ? fileObject.Stream.ReadToEnd() : File.ReadAllText(fileObject.FileUri);
+            fileObject.Status = FileStatus.uploading;
+            string jsonBody = _config.UseMemoryStream || connectivityCheck ? fileObject.Stream.ReadToEnd() : File.ReadAllText(fileObject.FileUri);
             fileObject.Stream.Dispose();
             byte[] jsonBytes = Encoding.UTF8.GetBytes(jsonBody);
 
@@ -337,13 +349,13 @@ namespace CollectSFData.LogAnalytics
 
             try
             {
-                string uri = "https://" + Config.LogAnalyticsId + _logAnalyticsCustomLogSuffix;
+                string uri = "https://" + _config.LogAnalyticsId + _logAnalyticsCustomLogSuffix;
                 Log.Debug($"post uri:{uri}");
                 Dictionary<string, string> headers = new Dictionary<string, string>();
 
                 // send empty log name for connectivity check
                 // successful connect will respond with badrequest
-                headers.Add("Log-Type", connectivityCheck ? string.Empty : Config.LogAnalyticsName);
+                headers.Add("Log-Type", connectivityCheck ? string.Empty : _config.LogAnalyticsName);
                 headers.Add("Authorization", signature);
                 headers.Add("x-ms-date", date);
                 headers.Add("time-generated-field", _timeStampField);
@@ -359,14 +371,17 @@ namespace CollectSFData.LogAnalytics
 
                 if (_httpClient.Success || (connectivityCheck && _httpClient.StatusCode == HttpStatusCode.BadRequest))
                 {
+                    fileObject.Status = FileStatus.succeeded;
                     return true;
                 }
 
+                fileObject.Status = FileStatus.failed;
                 Log.Error("unsuccessful response:", _httpClient.Response);
                 return false;
             }
             catch (Exception e)
             {
+                fileObject.Status = FileStatus.failed;
                 Log.Exception($"post exception:{e}");
                 return false;
             }
@@ -379,7 +394,7 @@ namespace CollectSFData.LogAnalytics
 
             try
             {
-                string uri = $"{_logAnalyticsQueryEndpoint}{Config.LogAnalyticsId}/query";
+                string uri = $"{_logAnalyticsQueryEndpoint}{_config.LogAnalyticsId}/query";
                 Log.Info($"post uri:{uri}", ConsoleColor.Blue, null, query);
 
                 Authenticate();
@@ -449,17 +464,17 @@ namespace CollectSFData.LogAnalytics
 
             Http http = default(Http);
 
-            if (Config.LogAnalyticsPurge.ToLower() == "true")
+            if (_config.LogAnalyticsPurge.ToLower() == "true")
             {
-                string purgeUrl = $"{ManagementAzureCom}{CurrentWorkspace.id}/purge?{_logAnalyticsApiVer}"; //api-version=2015-03-20";
+                string purgeUrl = $"{Constants.ManagementAzureCom}{CurrentWorkspace.id}/purge?{_logAnalyticsApiVer}"; //api-version=2015-03-20";
 
-                Log.Warning($"deleting data for 'LogAnalyticsName':{Config.LogAnalyticsName}");
+                Log.Warning($"deleting data for 'LogAnalyticsName':{_config.LogAnalyticsName}");
                 Log.Warning("Ctrl-C now if this is incorrect!");
-                Thread.Sleep(ThreadSleepMsWarning);
+                Thread.Sleep(Constants.ThreadSleepMsWarning);
 
                 LogAnalyticsPurge logAnalyticsPurge = new LogAnalyticsPurge()
                 {
-                    table = $"{Config.LogAnalyticsName}_CL", //"Usage",
+                    table = $"{_config.LogAnalyticsName}_CL", //"Usage",
                     filters = new[]
                     {
                         new LogAnalyticsPurge.Filters()
@@ -477,7 +492,7 @@ namespace CollectSFData.LogAnalytics
 
                 if (!string.IsNullOrEmpty(purgeStatusUrl))
                 {
-                    while (count < RetryCount)
+                    while (count < Constants.RetryCount)
                     {
                         http = _arm.SendRequest(purgeStatusUrl);
                         if (http.ResponseStreamJson.GetValue("status").ToString() == "completed")
@@ -488,7 +503,7 @@ namespace CollectSFData.LogAnalytics
 
                         count++;
                         Log.Info($"iteration: {count}");
-                        Thread.Sleep(ThreadSleepMs10000);
+                        Thread.Sleep(Constants.ThreadSleepMs10000);
                     }
                 }
 
@@ -499,7 +514,7 @@ namespace CollectSFData.LogAnalytics
             {
                 // check status of purge
                 Log.Info("checking status of purge request", ConsoleColor.Green);
-                http = _arm.SendRequest(Config.LogAnalyticsPurge);
+                http = _arm.SendRequest(_config.LogAnalyticsPurge);
             }
 
             Log.Info("response:", http.Success);
@@ -515,7 +530,7 @@ namespace CollectSFData.LogAnalytics
                 return true;
             }
 
-            Log.Error($"error creating workspaceModel: {Config.LogAnalyticsName}");
+            Log.Error($"error creating workspaceModel: {_config.LogAnalyticsName}");
             return false;
         }
     }

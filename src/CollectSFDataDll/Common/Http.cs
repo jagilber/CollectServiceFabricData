@@ -14,15 +14,13 @@ using System.Threading;
 
 namespace CollectSFData.Common
 {
-    public class Http : Constants
+    public class Http
     {
         private readonly HttpClient _httpClient;
 
-        private readonly CustomTaskManager _httpTasks = new CustomTaskManager(true);
+        private static readonly CustomTaskManager _httpTasks = new CustomTaskManager();
 
         public bool DisplayError { get; set; }
-
-        public bool DisplayResponse { get; set; }
 
         public HttpContentHeaders Headers { get; set; }
 
@@ -104,10 +102,7 @@ namespace CollectSFData.Common
                     if (!string.IsNullOrEmpty(ResponseStreamString))
                     {
                         ResponseStreamJson = JObject.Parse(ResponseStreamString);
-                        if (DisplayResponse)
-                        {
-                            Log.Info($"WebResponse stream: bytes: {Response.Content.Headers.ContentLength}\r\n{ResponseStreamJson}", ConsoleColor.DarkMagenta, ConsoleColor.Black);
-                        }
+                        Log.Debug($"WebResponse stream: bytes: {Response.Content.Headers.ContentLength}\r\n{ResponseStreamJson}");
                     }
                 }
                 else

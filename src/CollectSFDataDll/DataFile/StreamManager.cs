@@ -15,7 +15,7 @@ using System.Text.RegularExpressions;
 
 namespace CollectSFData.DataFile
 {
-    public class StreamManager : Constants
+    public class StreamManager
     {
         private FileObject _fileObject;
         private MemoryStream _memoryStream = new MemoryStream();
@@ -57,7 +57,7 @@ namespace CollectSFData.DataFile
             }
 
             compressedStream.Position = 0;
-            _fileObject.FileUri += ZipExtension;
+            _fileObject.FileUri += Constants.ZipExtension;
             _fileObject.Stream.Set(compressedStream);
 
             Log.Debug($"compressing memoryStream complete. size: {compressedStream.Length} position: {compressedStream.Position}");
@@ -75,7 +75,7 @@ namespace CollectSFData.DataFile
                 throw new ArgumentException();
             }
 
-            fileObject.FileUri = Regex.Replace(fileObject.FileUri, ZipExtension, "", RegexOptions.IgnoreCase);
+            fileObject.FileUri = Regex.Replace(fileObject.FileUri, Constants.ZipExtension, "", RegexOptions.IgnoreCase);
             Open();
 
             Log.Debug($"decompressing memoryStream start. start size: {_memoryStream.Length} position: {_memoryStream.Position}");
@@ -115,7 +115,7 @@ namespace CollectSFData.DataFile
         public IEnumerable<T> Read<T>()
         {
             Open(true);
-            Log.Debug($"enter: memoryStream length: {_memoryStream.Length}");
+            Log.Trivial($"enter: memoryStream length: {_memoryStream.Length}");
             char[] trimChars = new char[] { '[', ']', ',' };
 
             using (StreamReader reader = new StreamReader(_memoryStream, Encoding.UTF8, false, StreamBufferSize, _leaveStreamOpen))
@@ -181,7 +181,7 @@ namespace CollectSFData.DataFile
         public IEnumerable<string> ReadLine()
         {
             Open(true);
-            Log.Debug($"enter: memoryStream length: {_memoryStream.Length}");
+            Log.Trivial($"enter: memoryStream length: {_memoryStream.Length}");
 
             using (StreamReader reader = new StreamReader(_memoryStream, Encoding.UTF8, false, StreamBufferSize, _leaveStreamOpen))
             {
@@ -230,7 +230,7 @@ namespace CollectSFData.DataFile
 
         public MemoryStream Write<T>(IList<T> records, bool append = false)
         {
-            Log.Debug($"enter: record length: {records.Count}");
+            Log.Trivial($"enter: record length: {records.Count}");
 
             if (_leaveStreamOpen && append)
             {
@@ -244,7 +244,7 @@ namespace CollectSFData.DataFile
 
                     string lastChar = Encoding.UTF8.GetString(lastByte);
 
-                    Log.Debug($"last character:{lastChar}");
+                    Log.Trivial($"last character:{lastChar}");
 
                     if (lastChar.Equals("]"))
                     {
@@ -290,16 +290,16 @@ namespace CollectSFData.DataFile
             if (_memoryStream == null | reset)
             {
                 _memoryStream = new MemoryStream();
-                Log.Debug("creating new stream");
+                Log.Trivial("creating new stream");
             }
             else if (!_memoryStream.CanRead && !_memoryStream.CanWrite)
             {
                 _memoryStream = new MemoryStream(_memoryStream.ToArray());
-                Log.Debug($"opening stream. stream length: {_memoryStream.Length}");
+                Log.Trivial($"opening stream. stream length: {_memoryStream.Length}");
             }
             else
             {
-                Log.Debug($"stream already open. stream length: {_memoryStream.Length}");
+                Log.Trivial($"stream already open. stream length: {_memoryStream.Length}");
 
                 if (resetPosition)
                 {
