@@ -20,13 +20,17 @@ namespace CollectSFData.Common
         public const string DefaultDatePattern = "MM/dd/yyyy HH:mm zzz";
         public const string DefaultOptionsFile = "collectsfdata.options.json";
         public const int DefaultStartTimeHours = -2;
+        public const string DtrExtension = ".dtr";
+        public const string DtrZipExtension = ".dtr.zip";
         public const string DumpExtension = ".dmp";
         public const string EtlExtension = ".etl";
+        public const string EtwDefaultManifestsCache = "./manifests";
+        public const string EtwManifestExtension = ".man";
+        public const string EtwManifestsUrl = "https://raw.githubusercontent.com/microsoft/CollectServiceFabricData/master/manifests";
         public const string FalseStringPattern = @"(false|0|off|null)";
         public const string JsonExtension = ".json";
         public const string KustoUrlPattern = "https://(?<ingest>ingest-){1}(?<clusterName>.+?)\\.(?<location>.+?){0,1}\\.(?<domainName>.+?)/(?<databaseName>.+?){1}(/|$)";
         public const string ManagementAzureCom = "https://management.azure.com";
-        public const string ManifestExtension = ".man";
         public const int MaxCsvTransmitBytes = 1024 * 1024 * 100;
         public const int MaxJsonTransmitBytes = 1024 * 1024 * 25;
         public const int MaxResults = 5000;
@@ -45,13 +49,12 @@ namespace CollectSFData.Common
         public const int ThreadSleepMs1000 = 1000;
         public const int ThreadSleepMs10000 = 10000;
         public const int ThreadSleepMsWarning = 5000;
-        public const string TraceFileExtension = ".dtr";
-        public const string TraceZipExtension = ".dtr.zip";
         public const string TrueStringPattern = @"(true|1|on)";
         public const int WarningJsonTransmitBytes = (int)(MaxJsonTransmitBytes * .95);
         public const int WarningTimeSpanHours = 4;
         public const double WarningTimeSpanMinHours = .5F;
         public const string ZipExtension = ".zip";
         public static readonly string ApplicationName = AppDomain.CurrentDomain.FriendlyName;
+        public static readonly string EtwManifestsUrlIndex = $"{EtwManifestsUrl}/index.json";
     }
 }
