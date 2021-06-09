@@ -1,8 +1,10 @@
+using CollectSFDataGui.Server.Services;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.OpenApi.Models;
 
 namespace CollectSFDataGui.Server
 {
@@ -22,12 +24,16 @@ namespace CollectSFDataGui.Server
             {
                 app.UseDeveloperExceptionPage();
                 app.UseWebAssemblyDebugging();
+
+                app.UseSwagger();
+                app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "WebApplication1 v1"));
             }
             else
             {
                 app.UseExceptionHandler("/Error");
             }
 
+            app.UseHttpsRedirection();
             app.UseBlazorFrameworkFiles();
             app.UseStaticFiles();
 
@@ -47,6 +53,12 @@ namespace CollectSFDataGui.Server
         {
             services.AddControllersWithViews();
             services.AddRazorPages();
+            services.AddSingleton<IDataService, DataService>();
+
+            services.AddSwaggerGen(c =>
+            {
+                c.SwaggerDoc("v1", new OpenApiInfo { Title = "WebApplication1", Version = "v1" });
+            });
         }
     }
 }

@@ -2,6 +2,7 @@
 @using System.Linq
 @using System.Collections.Generic
 @using Radzen.Blazor
+
 @inherits LayoutComponentBase
 @inject NavigationManager UriHelper
 @inject IJSRuntime JSRuntime
@@ -17,11 +18,10 @@
     <ChildContent>
         <div class="row justify-content-start align-items-center">
             <div class="col-6 d-flex align-items-center">
-                <RadzenSidebarToggle
-                    Click="@(args => { sidebarExpanded = !sidebarExpanded; bodyExpanded = !bodyExpanded; })">
-                </RadzenSidebarToggle>
-                <RadzenLabel Text="CollectSFDataGui">
-                </RadzenLabel>
+                <RadzenSidebarToggle Click="SidebarToggleClick" />
+                <RadzenImage Path="./FabricSupport.ico" Style="height: 5%; width: 5%; border-radius: 10%;" />
+                &nbsp;
+                <RadzenLabel Text="Collect SF Data" Style="font-size: 200%;" />
             </div>
         </div>
     </ChildContent>
@@ -37,10 +37,10 @@
 </div>
 <RadzenSidebar @ref="@sidebar0" @bind-Expanded="@sidebarExpanded">
     <ChildContent>
-        <div style="padding: 1rem">
+        @*<div style="padding: 1rem">
             <input placeholder="Find component ..." class="rz-textbox" type="search" @oninput="@FilterPanelMenu"
                 style="width: 100%" />
-        </div>
+        </div>*@
         <RadzenPanelMenu>
             @foreach (var category in categories)
                     {
@@ -95,28 +95,49 @@
     {
         categoriesList.Add(new Category()
         {
-            Name = "configuration",
-            Title = "Configuration",
-            Path = "/configuration",
-            Icon = "&#xe06d"
+            Name = "Home",
+            Title = "Home",
+            Path = "/",
+            Icon = "home"
         });
+        categoriesList.Add(new Category()
+        {
+            Name = "Configure",
+            Title = "Configuration",
+            Path = "/add/configuration",
+            Icon = "settings"
+        });
+        categoriesList.Add(new Category()
+        {
+            Name = "Configurations",
+            Title = "Grid",
+            Path = "/grid-config",
+            Icon = "card_travel"
+        });
+
         categories = categoriesList;
     }
 
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        if (!firstRender)
-        {
-            var category = categories.First();
+    //protected override async Task OnAfterRenderAsync(bool firstRender)
+    //{
+    //    if (!firstRender)
+    //    {
+    //        var category = categories.First();
 
-            await JSRuntime.InvokeVoidAsync("setTitle", category.Title);
-        }
-    }
+    //        //await JSRuntime.InvokeVoidAsync("setTitle", category.Title);
+    //    }
+    //}
 
     void FilterPanelMenu(ChangeEventArgs args)
     {
         var term = args.Value.ToString();
 
         categories = categories.Where(x => x.Title.Contains(term));
+    }
+
+    protected void SidebarToggleClick(dynamic args)
+    {
+        sidebarExpanded = !sidebarExpanded;
+        bodyExpanded = !bodyExpanded;
     }
 }

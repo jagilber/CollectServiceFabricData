@@ -1,18 +1,13 @@
-﻿@page "/configuration"
-
-@using CollectSFDataGui.Shared
-@using CollectSFData.Azure
-@using CollectSFData.Common
-@using CollectSFData
-@using BlazorApp.Helpers
+﻿
 @using Microsoft.Extensions.Logging
+@using System.IO 
+@using System.Text
 @using System.Text.Json
-@using System.Net
 
 @inject IJSRuntime JSRuntime
-@inject HttpClient Http
-@inject NavigationManager navigationManager
-@inject ILogger<Configuration> logger
+@inject HttpClient _httpClient
+@inject NavigationManager _navigationManager
+@inject ILogger<ConfigureForm> logger
 
 <style>
     form .row {
@@ -20,24 +15,39 @@
     }
 </style>
 
-@if (config == null)
-{
-    <p><em>Loading...</em></p>
-}
-else
-{
-    <RadzenTemplateForm Data="@config" @onsubmit="SubmitForm">
+<h3>@_mode Tracing Configuration</h3>
+<hr/>
+@*<RadzenTemplateForm Data="@config"
+                    OnInvalidSubmit="(async () => await HandleSubmitAsync(false))">*@
+<div>
+    <RadzenTemplateForm TItem="ConfigurationProperties" Data="config" 
+                        Submit="SubmitForm" OnInvalidSubmit="@OnInvalidSubmit">
+        @*<DataAnnotationsValidator />
+        <ValidationSummary />*@
         <div class="row">
             <div class="col-md-6">
                 <RadzenFieldset Text="Required Information">
                     <div class="row">
                         <div class="col-md-4 align-items-center d-flex">
+                            <RadzenLabel Text="Table Name" />
+                        </div>
+                        <div class="col-md-8">
+                            <RadzenTextBox @bind-Value=@tableName Name="TableName" 
+                                           style="width: 100%;" ReadOnly="!IsAdd"/>
+                            <RadzenRequiredValidator Component="TableName" Text="Kusto table is required"
+                                                     Style="position: relative;" />
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-4 align-items-center d-flex">
                             <RadzenLabel Text="Gather Type" />
                         </div>
                         <div class="col-md-8">
-                            <RadzenDropDown @bind-Value=@config.GatherType AllowClear="true" Placeholder="select gather type" Data="@GatherTypes" style="width: 100%;"
-                            TextProperty="Gather Type" ValueProperty="GatherTypeValue" Name="GatherType">
-                            </RadzenDropDown>
+                            <RadzenDropDown @bind-Value=@config.GatherType AllowClear="true" Placeholder="select gather type" 
+                                            Data="@GatherTypes" style="width: 100%;"
+                                            TextProperty="Gather Type" ValueProperty="GatherTypeValue" Name="GatherType" />
+                            <RadzenRequiredValidator Component="GatherType" Text="Gather type is required"
+                                                     Style="position: relative;" />
                         </div>
                     </div>
                     <div class="row">
@@ -45,31 +55,27 @@ else
                             <RadzenLabel Text="Start Time Stamp" />
                         </div>
                         <div class="col-md-8">
-                            <RadzenDatePicker style="width: 100%;" Name="StartDate" @bind-Value=@config.StartTimeUtc 
-                                              ShowTime="true" ShowSeconds="true" HoursStep="1.5" MinutesStep="5" 
+                            <RadzenDatePicker style="width: 100%;" Name="StartDate" @bind-Value=@config.StartTimeUtc
+                                              ShowTime="true" ShowSeconds="true" HoursStep="1.5" MinutesStep="5"
                                               SecondsStep="10" DateFormat="MM/dd/yyyy HH:mm:ss" />
+                            <RadzenRequiredValidator Component="StartDate" Text="Start date time is required"
+                                                     Style="position: relative;" />
                         </div>
                     </div>
                     <div class="row">
                         <div class="col-md-4 align-items-center d-flex">
                             <RadzenLabel Text="End Time Stamp" />
                         </div>
-                        <div class="col-md-8">                            
+                        <div class="col-md-8">
                             <RadzenDatePicker style="width: 100%;" Name="EndDate" @bind-Value=@config.EndTimeUtc
-                                              ShowTime="true" ShowSeconds="true" HoursStep="1.5" MinutesStep="5" 
+                                              ShowTime="true" ShowSeconds="true" HoursStep="1.5" MinutesStep="5"
                                               SecondsStep="10" DateFormat="MM/dd/yyyy HH:mm:ss" />
+                            <RadzenRequiredValidator Component="EndDate" Text="End date time is required"
+                                                     Style="position: relative;" />
                         </div>
                     </div>
                 </RadzenFieldset>
                 <RadzenFieldset Text="Kusto Table Information">
-                    <div class="row">
-                        <div class="col-md-4 align-items-center d-flex">
-                            <RadzenLabel Text="Table Name" />
-                        </div>
-                        <div class="col-md-8">
-                            <RadzenTextBox @bind-Value=@tableName style="width: 100%;" Name="TableName" />
-                        </div>
-                    </div>
                     <RadzenTabs SelectedIndex="0">
                         <Tabs>
                             <RadzenTabsItem Text="Kusto">
@@ -79,8 +85,8 @@ else
                                     </div>
                                     <div class="col-md-10">
                                         <RadzenTextBox @bind-Value=@config.KustoCluster
-                                        Placeholder="https://ingest-sfcluster.kusto.windows.net/sfdatabase"
-                                        style="width: 100%;" Name="KustoCluster" />
+                                                       Placeholder="https://ingest-sfcluster.kusto.windows.net/sfdatabase"
+                                                       style="width: 100%;" Name="KustoCluster" />
                                     </div>
                                 </div>
 
@@ -138,64 +144,64 @@ else
                                 </div>
                             </RadzenTabsItem>
                             <RadzenTabsItem Text="Log Analytics">
-                            <div class="row">
-                                <div class="col-md-4 align-items-center d-flex">
-                                    <RadzenLabel Text="Log Analytics Id" />
+                                <div class="row">
+                                    <div class="col-md-4 align-items-center d-flex">
+                                        <RadzenLabel Text="Log Analytics Id" />
+                                    </div>
+                                    <div class="col-md-8">
+                                        <RadzenTextBox @bind-Value=@config.LogAnalyticsId style="width: 100%;" Placeholder="log analytics workspace id" />
+                                    </div>
                                 </div>
-                                <div class="col-md-8">
-                                    <RadzenTextBox @bind-Value=@config.LogAnalyticsId style="width: 100%;" Placeholder="log analytics workspace id" />
+                                <div class="row">
+                                    <div class="col-md-4 align-items-center d-flex">
+                                        <RadzenLabel Text="Log Analytics Key" />
+                                    </div>
+                                    <div class="col-md-8">
+                                        <RadzenTextBox @bind-Value=@config.LogAnalyticsKey style="width: 100%;" Placeholder="log analytics workspace key" />
+                                    </div>
                                 </div>
-                            </div>
-                            <div class="row">
-                                <div class="col-md-4 align-items-center d-flex">
-                                    <RadzenLabel Text="Log Analytics Key" />
+                                <div class="row">
+                                    <div class="col-md-4 align-items-center d-flex">
+                                        <RadzenLabel Text="Log Analytics Workspace Name" />
+                                    </div>
+                                    <div class="col-md-8">
+                                        <RadzenTextBox @bind-Value=@config.LogAnalyticsWorkspaceName style="width: 100%;" Placeholder="name of log analytics workspace name (for creation only)" />
+                                    </div>
                                 </div>
-                                <div class="col-md-8">
-                                    <RadzenTextBox @bind-Value=@config.LogAnalyticsKey style="width: 100%;" Placeholder="log analytics workspace key" />
+                                <div class="row">
+                                    <div class="col-md-4 align-items-center d-flex">
+                                        <RadzenLabel Text="Log Analytics Workspace Sku" />
+                                    </div>
+                                    <div class="col-md-8">
+                                        <RadzenTextBox @bind-Value=@config.LogAnalyticsWorkspaceSku style="width: 100%;" Placeholder="name of log analytics workspace sku typically 'PerGB2018'" />
+                                    </div>
                                 </div>
-                            </div>
-                            <div class="row">
-                                <div class="col-md-4 align-items-center d-flex">
-                                    <RadzenLabel Text="Log Analytics Workspace Name" />
+                                <div class="row">
+                                    <div class="col-md-4 align-items-center d-flex">
+                                        <RadzenLabel Text="Log Analytics Create Table" />
+                                    </div>
+                                    <div class="col-md-8">
+                                        <RadzenSelectBar @bind-Value=@config.LogAnalyticsCreate TValue="bool">
+                                            <Items>
+                                                <RadzenSelectBarItem Text="On" Value="true" />
+                                                <RadzenSelectBarItem Text="Off" Value="false" />
+                                            </Items>
+                                        </RadzenSelectBar>
+                                    </div>
                                 </div>
-                                <div class="col-md-8">
-                                    <RadzenTextBox @bind-Value=@config.LogAnalyticsWorkspaceName style="width: 100%;" Placeholder="name of log analytics workspace name (for creation only)" />
+                                <div class="row">
+                                    <div class="col-md-4 align-items-center d-flex">
+                                        <RadzenLabel Text="Log Analytics Recreate Table" />
+                                    </div>
+                                    <div class="col-md-8">
+                                        <RadzenSelectBar @bind-Value=@config.LogAnalyticsRecreate TValue="bool">
+                                            <Items>
+                                                <RadzenSelectBarItem Text="On" Value="true" />
+                                                <RadzenSelectBarItem Text="Off" Value="false" />
+                                            </Items>
+                                        </RadzenSelectBar>
+                                    </div>
                                 </div>
-                            </div>
-                            <div class="row">
-                                <div class="col-md-4 align-items-center d-flex">
-                                    <RadzenLabel Text="Log Analytics Workspace Sku" />
-                                </div>
-                                <div class="col-md-8">
-                                    <RadzenTextBox @bind-Value=@config.LogAnalyticsWorkspaceSku style="width: 100%;" Placeholder="name of log analytics workspace sku typically 'PerGB2018'" />
-                                </div>
-                            </div>
-                            <div class="row">
-                                <div class="col-md-4 align-items-center d-flex">
-                                    <RadzenLabel Text="Log Analytics Create Table" />
-                                </div>
-                                <div class="col-md-8">
-                                    <RadzenSelectBar @bind-Value=@config.LogAnalyticsCreate TValue="bool">
-                                        <Items>
-                                            <RadzenSelectBarItem Text="On" Value="true" />
-                                            <RadzenSelectBarItem Text="Off" Value="false" />
-                                        </Items>
-                                    </RadzenSelectBar>
-                                </div>
-                            </div>
-                            <div class="row">
-                                <div class="col-md-4 align-items-center d-flex">
-                                    <RadzenLabel Text="Log Analytics Recreate Table" />
-                                </div>
-                                <div class="col-md-8">
-                                    <RadzenSelectBar @bind-Value=@config.LogAnalyticsRecreate TValue="bool">
-                                        <Items>
-                                            <RadzenSelectBarItem Text="On" Value="true" />
-                                            <RadzenSelectBarItem Text="Off" Value="false" />
-                                        </Items>
-                                    </RadzenSelectBar>
-                                </div>
-                            </div>
                             </RadzenTabsItem>
                         </Tabs>
                     </RadzenTabs>
@@ -228,27 +234,18 @@ else
                 </RadzenFieldset>
                 <RadzenFieldset Text="Operations">
                     <div class="row justify-content-left">
-                        @* <RadzenButton Text="Upload" Click=@(args => upload.Upload()) Style="margin-left: 20px;" />
-                        <RadzenUpload @ref="upload" Auto="false" Multiple="false" Url="upload/single" Style="margin-left: 20px;"
-                        Change=@(args => OnChange(args, "Manual Upload")) Progress=@(args => OnProgress(args, "Manual Upload"))
-                        Complete=@OnComplete /> *@
-                        <RadzenUpload
-                            ChooseText="Upload" 
-                            Url="upload/single" 
-                            Style="margin-left: 20px;" 
-                            Complete=@(args => OnComplete(args))
-                        />
-                    </div>
-                    <div class="row justify-content-left">
-                        <RadzenButton ButtonType="ButtonType.Submit"  Icon="save" style="margin-left: 20px;" Text="Save" />
-                    </div>
-                    <div class="row justify-content-left">
-                        <RadzenButton ButtonStyle="ButtonStyle.Light" Icon="cancel" style="margin-left: 20px;" Text="Cancel"
-                        Click="@Cancel" />
+                        <RadzenUpload ChooseText="Upload" Url="upload/single"
+                                      Style="margin-left: 5%;" Visible="IsAdd"
+                                      Progress="@OnUploadProgress" Complete=@OnUploadComplete />
+                        <RadzenButton ButtonType="ButtonType.Submit" Icon="save"
+                                      style="margin-left: 5%; width: 30%;" Text="Save" />
+                        <RadzenButton ButtonStyle="ButtonStyle.Light" Icon="cancel"
+                                      style="margin-left: 5%; width: 30%;" Text="Cancel"
+                                      Click="@Cancel" />
                     </div>
                 </RadzenFieldset>
             </div>
-            <div class="col-md-6">                
+            <div class="col-md-6">
                 <RadzenFieldset Text="Authorization">
                     <RadzenTabs SelectedIndex="0">
                         <Tabs>
@@ -266,7 +263,7 @@ else
                                         <RadzenLabel Text="Blob Endpoint" />
                                     </div>
                                     <div class="col-md-9">
-                                        <RadzenTextBox Value=@config.SasEndpointInfo.BlobEndpoint style="width: 100%;" Disabled="true" ReadOnly="true"/> 
+                                        <RadzenTextBox Value=@config.SasEndpointInfo.BlobEndpoint style="width: 100%;" Disabled="true" ReadOnly="true" />
 
                                     </div>
                                 </div>
@@ -275,7 +272,7 @@ else
                                         <RadzenLabel Text="Storage Account" />
                                     </div>
                                     <div class="col-md-9">
-                                        <RadzenTextBox Value=@config.SasEndpointInfo.StorageAccountName style="width: 100%;" Disabled="true" ReadOnly="true"/> 
+                                        <RadzenTextBox Value=@config.SasEndpointInfo.StorageAccountName style="width: 100%;" Disabled="true" ReadOnly="true" />
                                     </div>
                                 </div>
                                 <div class="row">
@@ -283,8 +280,8 @@ else
                                         <RadzenLabel Text="SAS Token" />
                                     </div>
                                     <div class="col-md-9">
-                                        <RadzenTextBox Value=@config.SasEndpointInfo.SasToken style="width: 100%;" Disabled="true" ReadOnly="true"/> 
-                                </div>
+                                        <RadzenTextBox Value=@config.SasEndpointInfo.SasToken style="width: 100%;" Disabled="true" ReadOnly="true" />
+                                    </div>
                                 </div>
                                 <div class="row">
                                     <div class="align-items-center d-flex col-md-3">
@@ -305,13 +302,13 @@ else
                                         <RadzenLabel Text="Signed Services" />
                                     </div>
                                     <div class="col-md-3">
-                                        <RadzenTextBox Value=@config.SasEndpointInfo.Parameters.SignedServices style="width: 100%;" Disabled="true" ReadOnly="true"/> 
+                                        <RadzenTextBox Value=@config.SasEndpointInfo.Parameters.SignedServices style="width: 100%;" Disabled="true" ReadOnly="true" />
                                     </div>
                                     <div class="align-items-center d-flex col-md-3">
                                         <RadzenLabel Text="Signed Resource Types" />
                                     </div>
                                     <div class="col-md-3">
-                                        <RadzenTextBox Value=@config.SasEndpointInfo.Parameters.SignedResourceTypes style="width: 100%;" Disabled="true" ReadOnly="true"/>                             
+                                        <RadzenTextBox Value=@config.SasEndpointInfo.Parameters.SignedResourceTypes style="width: 100%;" Disabled="true" ReadOnly="true" />
                                     </div>
                                 </div>
                             </RadzenTabsItem>
@@ -481,114 +478,89 @@ else
             </div>
         </div>
     </RadzenTemplateForm>
-    <div class="container">
-        <div class="console-content">
-        <EventConsole @ref=@console />
-        </div>
-    </div>
-}
+</div>
+@*</RadzenTemplateForm>*@
+
 
 @code {
-    private List<string> GatherTypes;
-    private ConfigurationProperties config { get; set; }
-    private ConfigurationProperties tempconfig { get; set; }
-    private string tableName;
 
-    protected override async Task OnInitializedAsync()
-    {
-        GatherTypes = Enum.GetNames(typeof(CollectSFData.DataFile.FileTypesEnum)).ToList();
-        await GetCurrentConfig();
-    }
+    [Parameter]
+    public bool IsAdd { get; set; }
 
-    protected async Task SubmitForm()
-    {
-        // Set the table name in configuration option
-        config.KustoTable = tableName;
+    [Parameter]
+    public ConfigurationProperties config { get; set; }
 
-        // REST operation to post the configuration option
-        var response = await Http.PostAsJsonAsync("api/configuration/save", config);
+    [Parameter]
+    public List<string> GatherTypes { get; set; }
 
-        if(response.IsSuccessStatusCode)
-        {
-            navigationManager.NavigateTo("/");
+    private string _tableName;
+    public string tableName {
+        get {
+            _tableName = config.KustoTable;
+            return _tableName;
         }
-    }
-
-    async void UpdateConfig(string uploadedJson)
-    {
-        HttpResponseMessage response = await Http.PostAsJsonAsync("api/configuration/update", uploadedJson, JsonHelpers.GetJsonSerializerOptions());
-
-        string jsonString = await response.Content.ReadAsStringAsync();
-        console.Log($"UpdateConfig:responseString:{jsonString}");
-        jsonString = jsonString.Replace("\"{", "{").Replace("}\"", "}").Replace("\\\"", "\"");
-
-        if(response.StatusCode == HttpStatusCode.Created){
-            ConfigurationProperties configurationProperties = JsonSerializer.Deserialize<ConfigurationProperties>(jsonString, JsonHelpers.GetJsonSerializerOptions());
-            console.Log($"UpdateConfig:configurationProperties:{configurationProperties.NoProgressTimeoutMin}");
-            config = configurationProperties;
-            tableName = config.KustoTable;
-            console.Log($"UpdateConfig:exit:properties changed");
-        }
-        else
-        {
-            console.Log($"ERROR:{response.StatusCode}");
-            await GetCurrentConfig();
-        }
-    }
-
-    void Cancel()
-    {
-        Http.CancelPendingRequests();
-    }
-
-
-
-    async Task GetCurrentConfig()
-    {
-
-        config = await Http.GetFromJsonAsync<ConfigurationProperties>("api/configurationJson", JsonHelpers.GetJsonSerializerOptions());
-        tableName = config.KustoTable;
-
-    }
-
-
-    // file upload
-    EventConsole console;
-    RadzenUpload upload;
-    int progress;
-    string info;
-
-    void OnChange(UploadChangeEventArgs args, string name)
-    {
-        foreach (var file in args.Files)
-        {
-            console.Log($"File: {file.Name} / {file.Size} bytes");
-        }
-
-        console.Log($"{name} changed");
-    }
-
-    void OnProgress(UploadProgressArgs args, string name)
-    {
-        this.info = $"% '{name}' / {args.Loaded} of {args.Total} bytes.";
-        this.progress = args.Progress;
-
-        if (args.Progress == 100)
-        {
-            console.Clear();
-
-            foreach (var file in args.Files)
+        set {
+            _tableName = value;
+            if (!string.IsNullOrEmpty(_tableName))
             {
-                console.Log($"Uploaded: {file.Name} / {file.Size} bytes");
+                config.KustoTable = _tableName;
             }
         }
     }
 
-    void OnComplete(UploadCompleteEventArgs args)
-    {
-        string jsonString = args.RawResponse;
+    [Parameter]
+    public EventCallback<bool> ValidationResult { get; set; }
 
-        console.Log($"Server response: {jsonString}");
-        UpdateConfig(jsonString);
+    [Parameter]
+    public EventCallback CancelRequest { get; set; }
+
+    private string _mode => IsAdd ? "Add" : "Edit";
+
+    private Task HandleSubmitAsync(bool isValid)
+    {
+        return ValidationResult.InvokeAsync(isValid);
+    }
+
+    private Task CancelAsync()
+    {
+        return CancelRequest.InvokeAsync(null);
+    }
+
+    private void Cancel()
+    {
+        _navigationManager.NavigateTo("/");
+    }
+
+    private async Task SubmitForm()
+    {
+        // REST operation to post the configuration option
+        var response = await _httpClient.PostAsJsonAsync("api/configuration/save", config);
+
+        if (response.IsSuccessStatusCode)
+        {
+            _navigationManager.NavigateTo("/grid-config");
+        }
+    }
+
+    void OnInvalidSubmit(FormInvalidSubmitEventArgs args)
+    {
+
+    }
+
+    private void OnUploadProgress(UploadProgressArgs args)
+    {
+        var t = args.Total;
+        if (args.Progress == 100)
+        {
+
+        }
+    }
+
+    private async Task OnUploadComplete(UploadCompleteEventArgs args)
+    {
+        // Get the uploaded JSON data de-serialized
+        config = await JsonHelpers.ToConfigurationProperties(args.RawResponse);
+
+        StateHasChanged();
     }
 }

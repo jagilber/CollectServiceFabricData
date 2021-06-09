@@ -8,6 +8,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Net.Http.Json;
+using System.IO;
+using CollectSFDataGui.Server.Services;
+using System.Threading.Tasks;
 
 namespace CollectSFDataGui.Server.Controllers
 {
@@ -22,6 +25,7 @@ namespace CollectSFDataGui.Server.Controllers
         private static ConfigurationOptions _config;
         private static ILogger<ConfigurationController> _logger;
         private static List<LogMessage> _logMessages;
+        private IDataService _dataService;
 
         static ConfigurationController()
         {
@@ -32,9 +36,10 @@ namespace CollectSFDataGui.Server.Controllers
             _config = _collector.Config;
         }
 
-        public ConfigurationController(ILogger<ConfigurationController> logger)
+        public ConfigurationController(ILogger<ConfigurationController> logger, IDataService dataService)
         {
             _logger = logger;
+            _dataService = dataService;
         }
 
         [HttpGet]
@@ -131,6 +136,52 @@ namespace CollectSFDataGui.Server.Controllers
         public IEnumerable<ConfigurationOptions> Index()
         {
             return new List<ConfigurationOptions>() { _config.Clone() }.AsEnumerable();
+        }
+
+        [HttpPost]
+        [Route("/api/configuration/save")]
+        public async Task<IActionResult> SaveConfiguration([FromBody] ConfigurationProperties data)
+        {
+            await _dataService.SaveConfiguration(data);
+            return Ok();
+        }
+
+        [HttpGet]
+        [Route("/api/allconfiguration")]
+        public async Task<IActionResult> GetAllConfiguration()
+        {
+            var allConfiguration = await _dataService.GetAllConfiguration();
+            if (allConfiguration != null)
+            {
+                return Ok(allConfiguration);
+            }
+            else
+            {
+                return NotFound(allConfiguration);
+            }
+        }
+
+        [HttpGet]
+        [Route("/api/configuration/pull/{kustoTable}")]
+        public async Task<IActionResult> GetConfiguration([FromRoute]string kustoTable)
+        {
+            var configuration = await _dataService.PullConfiguration(kustoTable);
+            if (configuration != null)
+            {
+                return Ok(configuration);
+            }
+            else
+            {
+                return NotFound(configuration);
+            }
+        }
+
+        [HttpDelete]
+        [Route("/api/configuration/{kustoTable}")]
+        public async Task<IActionResult> DeleteConfiguration(string kustoTable)
+        {
+            var deleteResult = await _dataService.DeleteConfiguration(kustoTable);
+            return Ok(deleteResult);
         }
 
         private static void Log_MessageLogged(object sender, LogMessage args)
