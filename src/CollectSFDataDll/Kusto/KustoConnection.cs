@@ -19,27 +19,29 @@ using System.Threading.Tasks;
 
 namespace CollectSFData.Kusto
 {
-    public class KustoConnection : Constants
+    public class KustoConnection
     {
-        public KustoQueueMessages IngestFileObjectsFailed = new KustoQueueMessages();
-        public KustoQueueMessages IngestFileObjectsPending = new KustoQueueMessages();
-        public KustoQueueMessages IngestFileObjectsSucceeded = new KustoQueueMessages();
-        private bool _appendingToExistingTableUnique;
         private const int _maxMessageCount = 32;
-        private readonly CustomTaskManager _kustoTasks = new CustomTaskManager(true);
+        private readonly CustomTaskManager _kustoTasks;
         private readonly TimeSpan _messageTimeToLive = new TimeSpan(0, 1, 0, 0);
         private readonly CancellationTokenSource _tokenSource = new CancellationTokenSource();
-        private int _failureCount;
+        private bool _appendingToExistingTableUnique;
+        private ConfigurationOptions _config;
+        private object _enumeratorLock = new object();
         private DateTime _failureQueryTime;
         private string _ingestCursor = "''";
         private IEnumerator<string> _ingestionQueueEnumerator;
-        private Instance _instance = Instance.Singleton();
+        private Instance _instance;
         private Task _monitorTask;
         private IEnumerator<string> _tempContainerEnumerator;
-        private int _totalBlobIngestQueued;
-        private int _totalBlobIngestResults;
-        private ConfigurationOptions Config => _instance.Config;
-        public KustoEndpoint Endpoint { get; private set; }
+        public KustoEndpoint Endpoint { get; set; }
+
+        public KustoConnection(Instance instance)
+        {
+            _instance = instance ?? throw new ArgumentNullException(nameof(instance));
+            _config = _instance.Config;
+            _kustoTasks = new CustomTaskManager();
+        }
 
         public void AddFile(FileObject fileObject)
         {
@@ -51,7 +53,7 @@ namespace CollectSFData.Kusto
                 return;
             }
 
-            if (Config.KustoUseBlobAsSource)
+            if (_config.KustoUseBlobAsSource && fileObject.IsSourceFileLinkCompliant())
             {
                 IngestSingleFile(fileObject);
             }
@@ -72,30 +74,27 @@ namespace CollectSFData.Kusto
                 IngestResourceIdKustoTableMapping();
 
                 if (_appendingToExistingTableUnique
-                    && Config.FileType == FileTypesEnum.table
-                    && IngestFileObjectsSucceeded.Any())
+                    && _config.FileType == FileTypesEnum.table
+                    && _instance.FileObjects.Any(FileStatus.succeeded))
                 {
                     // only way for records from table storage to be unique since there is not a file reference
                     Log.Info("removing duplicate records", ConsoleColor.White);
                     IEnumerable<KustoCsvSchema> schema = new KustoIngestionMappings(new FileObject()).TableSchema();
-                    //schema = schema.Where(x => x.Name != "RelativeUri");
+                    schema = schema.Where(x => x.Name != "RelativeUri");
                     string names = string.Join(",", schema.Select(x => x.Name).ToList());
 
-                    string command = $".set-or-replace {Config.KustoTable} <| {Config.KustoTable} | summarize min(RelativeUri) by {names}";
+                    string command = $".set-or-replace {_config.KustoTable} <| {_config.KustoTable} | summarize min(RelativeUri) by {names}";
                     Log.Info(command);
 
                     Endpoint.Command(command);
                     Log.Info("removed duplicate records", ConsoleColor.White);
                 }
 
-                if (_failureCount > 0)
-                {
-                    _instance.TotalErrors += _failureCount;
-                    Log.Error($"Ingestion error total:({_failureCount})");
-                }
+                int ingestFailureCount = _instance.FileObjects.Count(FileStatus.failed);
+                _instance.TotalErrors += ingestFailureCount;
 
-                Log.Info($"return: total kusto ingests:{_totalBlobIngestQueued} success:{_failureCount == 0} ");
-                return _failureCount == 0;
+                Log.Info($"return: total kusto ingests:{_instance.FileObjects.Count(FileStatus.uploading | FileStatus.succeeded)} success:{ingestFailureCount == 0} ");
+                return ingestFailureCount == 0;
             }
             catch (Exception ex)
             {
@@ -106,18 +105,21 @@ namespace CollectSFData.Kusto
 
         public bool Connect()
         {
-            Endpoint = new KustoEndpoint();
+            Endpoint = new KustoEndpoint(_config);
             Endpoint.Authenticate();
             _failureQueryTime = _instance.StartTime.ToUniversalTime();
-            _tempContainerEnumerator = Endpoint.IngestionResources.TempStorageContainers.GetEnumerator();
-            _ingestionQueueEnumerator = Endpoint.IngestionResources.IngestionQueues.GetEnumerator();
 
-            if (Config.IsKustoPurgeRequested())
+            if (!PopulateQueueEnumerators())
+            {
+                return false;
+            }
+
+            if (_config.IsKustoPurgeRequested())
             {
                 Purge();
                 return false;
             }
-            else if (Config.KustoRecreateTable)
+            else if (_config.KustoRecreateTable)
             {
                 PurgeMessages(Endpoint.TableName);
 
@@ -126,11 +128,14 @@ namespace CollectSFData.Kusto
                     return false;
                 }
             }
-            else if (Config.Unique && Endpoint.HasTable(Endpoint.TableName))
+            else if (_config.Unique && Endpoint.HasTable(Endpoint.TableName))
             {
                 _appendingToExistingTableUnique = true;
-                Endpoint.Query($"['{Endpoint.TableName}']|distinct RelativeUri")
-                    .ForEach(x => IngestFileObjectsSucceeded.Add(relativeUri: x));
+                List<string> existingUploads = Endpoint.Query($"['{Endpoint.TableName}']|distinct RelativeUri");
+                foreach (string existingUpload in existingUploads)
+                {
+                    _instance.FileObjects.Add(new FileObject(existingUpload) { Status = FileStatus.existing });
+                }
             }
 
             // monitor for new files to be uploaded
@@ -142,15 +147,63 @@ namespace CollectSFData.Kusto
             return true;
         }
 
+        public Tuple<string, string> GetNextIngestionQueue()
+        {
+            string tempContainer = null;
+            string ingestionQueue = null;
+
+            lock (_enumeratorLock)
+            {
+                if (!_tempContainerEnumerator.MoveNext())
+                {
+                    _tempContainerEnumerator.Reset();
+                    _tempContainerEnumerator.MoveNext();
+                }
+
+                tempContainer = _tempContainerEnumerator.Current;
+
+                if (!_ingestionQueueEnumerator.MoveNext())
+                {
+                    _ingestionQueueEnumerator.Reset();
+                    _ingestionQueueEnumerator.MoveNext();
+                }
+
+                ingestionQueue = _ingestionQueueEnumerator.Current;
+            }
+
+            Log.Debug($"returning:tempContainer.Current:{tempContainer} ingestionQueue.Current:{ingestionQueue}");
+            return new Tuple<string, string>(ingestionQueue, tempContainer);
+        }
+
+        public bool PopulateQueueEnumerators()
+        {
+            _tempContainerEnumerator = Endpoint.IngestionResources.TempStorageContainers.GetEnumerator();
+            _ingestionQueueEnumerator = Endpoint.IngestionResources.IngestionQueues.GetEnumerator();
+
+            if (!_ingestionQueueEnumerator.MoveNext())
+            {
+                Log.Error($"problem with ingestion queues", Endpoint.IngestionResources);
+                return false;
+            }
+
+            if (!_tempContainerEnumerator.MoveNext())
+            {
+                Log.Error($"problem with temp container ", Endpoint.IngestionResources);
+                return false;
+            }
+            return true;
+        }
+
         private bool CanIngest(string relativeUri)
         {
-            if (!Config.Unique)
+            if (!_config.Unique)
             {
                 return true;
             }
 
-            string cleanUri = Regex.Replace(relativeUri, $"\\.?\\d*?({ZipExtension}|{TableExtension})", "");
-            return !IngestFileObjectsSucceeded.Contains(cleanUri);
+            string cleanUri = Regex.Replace(relativeUri, $"\\.?\\d*?({Constants.ZipExtension}|{Constants.TableExtension})", "");
+            FileObject fileObject = _instance.FileObjects.FindByUriFirstOrDefault(cleanUri);
+            return fileObject.Status != FileStatus.existing;
         }
 
         private void IngestMultipleFiles(FileObjectCollection fileObjectCollection)
@@ -160,12 +213,14 @@ namespace CollectSFData.Kusto
 
         private void IngestResourceIdKustoTableMapping()
         {
-            string resourceUri = Config.ResourceUri;
+            string resourceUri = _config.ResourceUri;
 
-            if (string.IsNullOrEmpty(resourceUri) && IngestFileObjectsSucceeded.Any() && Config.FileType == FileTypesEnum.trace)
+            if (string.IsNullOrEmpty(resourceUri)
+                && _instance.FileObjects.Any(FileStatus.succeeded)
+                && _config.FileType == FileTypesEnum.trace)
             {
                 // Fetch resource ID from ingested traces
-                var results = Endpoint.Query($"['{Endpoint.TableName}']" +
+                List<string> results = Endpoint.Query($"['{Endpoint.TableName}']" +
                     $" | where Type == 'InfrastructureService.RestClientHelper'" +
                     $" | take 1");
 
@@ -180,12 +235,12 @@ namespace CollectSFData.Kusto
 
             if (!string.IsNullOrWhiteSpace(resourceUri))
             {
-                var metaDatatableName = "TableMetaData";
-                var metaDatetableSchema = "TimeStamp:datetime, startTime:datetime, endTime:datetime, resourceId:string, tableName:string, logType:string";
+                string metaDatatableName = "TableMetaData";
+                string metaDatetableSchema = "TimeStamp:datetime, startTime:datetime, endTime:datetime, resourceId:string, tableName:string, logType:string";
 
                 if (Endpoint.CreateTable(metaDatatableName, metaDatetableSchema))
                 {
-                    Endpoint.IngestInline(metaDatatableName, string.Format("{0},{1},{2},{3},{4},{5}", DateTime.UtcNow, Config.StartTimeUtc.UtcDateTime, Config.EndTimeUtc.UtcDateTime, resourceUri, Config.KustoTable, Config.FileType));
+                    Endpoint.IngestInline(metaDatatableName, string.Format("{0},{1},{2},{3},{4},{5}", DateTime.UtcNow, _config.StartTimeUtc.UtcDateTime, _config.EndTimeUtc.UtcDateTime, resourceUri, _config.KustoTable, _config.FileType));
                 }
             }
         }
@@ -194,30 +249,21 @@ namespace CollectSFData.Kusto
         {
             string blobUriWithSas = null;
             string ingestionMapping = SetIngestionMapping(fileObject);
+            Tuple<string, string> nextQueues = GetNextIngestionQueue();
+            string ingestionQueue = nextQueues.Item1;
+            string tempContainer = nextQueues.Item2;
 
-            if (!_tempContainerEnumerator.MoveNext() | string.IsNullOrEmpty(_tempContainerEnumerator.Current))
+            if (_config.KustoUseBlobAsSource && fileObject.IsSourceFileLinkCompliant())
             {
-                _tempContainerEnumerator.Reset();
-                _tempContainerEnumerator.MoveNext();
-            }
-
-            if (!_ingestionQueueEnumerator.MoveNext() | string.IsNullOrEmpty(_ingestionQueueEnumerator.Current))
-            {
-                _ingestionQueueEnumerator.Reset();
-                _ingestionQueueEnumerator.MoveNext();
-            }
-
-            if (Config.KustoUseBlobAsSource)
-            {
-                blobUriWithSas = $"{fileObject.FileUri}{Config.SasEndpointInfo.SasToken}";
+                blobUriWithSas = $"{fileObject.FileUri}{_config.SasEndpointInfo.SasToken}";
             }
             else
             {
                 string blobName = Path.GetFileName(fileObject.FileUri);
-                blobUriWithSas = UploadFileToBlobContainer(fileObject, _tempContainerEnumerator.Current, fileObject.NodeName, blobName);
+                blobUriWithSas = UploadFileToBlobContainer(fileObject, tempContainer, fileObject.NodeName, blobName);
             }
 
-            PostMessageToQueue(_ingestionQueueEnumerator.Current, PrepareIngestionMessage(blobUriWithSas, fileObject.Length, ingestionMapping), fileObject);
+            PostMessageToQueue(ingestionQueue, PrepareIngestionMessage(blobUriWithSas, fileObject.Length, ingestionMapping), fileObject);
         }
 
         private void IngestStatusFailQuery()
@@ -232,47 +278,23 @@ namespace CollectSFData.Kusto
             foreach (KustoRestRecord record in failedRecords)
             {
                 string uriFile = record["IngestionSourcePath"].ToString();
-                Log.ToFile($"checking failed ingested for failed relativeuri: {uriFile}");
-                KustoQueueMessage message;
+                Log.Debug($"checking failed ingested for failed relativeuri: {uriFile}");
+                FileObject fileObject = _instance.FileObjects.FindByUriFirstOrDefault(uriFile);
 
-                if (!IngestFileObjectsFailed.Contains(uriFile))
+                fileObject.Status = FileStatus.failed;
+
+                if (fileObject.IsPopulated)
                 {
-                    Log.ToFile($"checking message list for failed relativeUri: {uriFile}");
-                    if (IngestFileObjectsPending.Contains(uriFile))
-                    {
-                        message = IngestFileObjectsPending.Item(uriFile);
-                        message.Failed = DateTime.Now;
-                        message.KustoRestRecord = record;
-
-                        Log.Error($"adding failedUri to IngestFileObjectsFailed[{IngestFileObjectsFailed.Count()}]: {uriFile}", record);
-                        IngestFileObjectsFailed.Add(message);
-
-                        Log.Info($"removing failed ingested relativeuri from IngestFileObjectsPending[{IngestFileObjectsPending.Count()}]: {message}");
-                        IngestFileObjectsPending.Remove(message);
-                    }
-                    else
-                    {
-                        Log.Error($"adding failedUri string to IngestFileObjectsFailed[{IngestFileObjectsFailed.Count()}]: {uriFile}", record);
-                        IngestFileObjectsFailed.Add(fileUri: uriFile);
-                    }
-
-                    _failureCount++;
-                    _failureQueryTime = DateTime.Now.ToUniversalTime().AddMinutes(-1);
+                    Log.Error($"file upload to kusto failed: [{_instance.FileObjects.Count(FileStatus.failed)}]: {uriFile}", record);
                 }
+                else
+                {
+                    Log.Error($"file upload to kusto failed:adding fileUri fileObject [{_instance.FileObjects.Count(FileStatus.failed)}]: {uriFile}", record);
+                    _instance.FileObjects.Add(fileObject);
+                }
+
+                _failureQueryTime = DateTime.Now.ToUniversalTime().AddMinutes(-1);
             }
-        }
-
-        private void IngestStatusQuery()
-        {
-            if (!Endpoint.HasTable(Endpoint.TableName))
-            {
-                return;
-            }
-
-            IngestStatusSuccessQuery();
-            IngestStatusFailQuery();
-
-            Log.Info($"current count ingested: {IngestFileObjectsSucceeded.Count()} ingesting: {IngestFileObjectsPending.Count()} failed: {_failureCount} total: {IngestFileObjectsSucceeded.Count() + IngestFileObjectsPending.Count() + _failureCount}", ConsoleColor.Green);
         }
 
         private void IngestStatusSuccessQuery()
@@ -283,34 +305,26 @@ namespace CollectSFData.Kusto
                 $"| where ingestion_time() > todatetime('{_instance.StartTime.ToUniversalTime().ToString("o")}')" +
                 $"| distinct RelativeUri"));
 
-            _ingestCursor = IngestFileObjectsSucceeded.Count() < 1 ? "" : Endpoint.Cursor;
+            _ingestCursor = !_instance.FileObjects.Any(FileStatus.succeeded) ? "" : Endpoint.Cursor;
             Log.Debug($"files ingested:{successUris.Count}");
 
             foreach (string uriFile in successUris)
             {
-                Log.ToFile($"checking ingested uri for success relativeuri: {uriFile}");
-                KustoQueueMessage message;
+                Log.Debug($"checking ingested uri for success relativeuri: {uriFile}");
+                FileObject fileObject = _instance.FileObjects.FindByUriFirstOrDefault(uriFile);
+                fileObject.Status = FileStatus.succeeded;
 
-                if (!IngestFileObjectsSucceeded.Contains(uriFile))
+                if (fileObject.IsPopulated)
                 {
-                    if (IngestFileObjectsPending.Contains(uriFile))
-                    {
-                        message = IngestFileObjectsPending.Item(uriFile);
-                        message.Succeeded = DateTime.Now;
-
-                        Log.Info($"adding relativeuri to IngestFileObjectsSucceeded[{IngestFileObjectsSucceeded.Count()}]: {uriFile}", ConsoleColor.Green);
-                        IngestFileObjectsSucceeded.Add(message);
-
-                        Log.Info($"removing successful ingested relativeuri from IngestFileObjectsPending[{IngestFileObjectsPending.Count()}]: {message}");
-                        IngestFileObjectsPending.Remove(message);
-                    }
-                    else
-                    {
-                        Log.Info($"adding relativeuri string to IngestFileObjectsSucceeded[{IngestFileObjectsSucceeded.Count()}]: {uriFile}", ConsoleColor.Green);
-                        IngestFileObjectsSucceeded.Add(fileUri: uriFile);
-                    }
+                    Log.Info($"file upload to kusto succeeded:[{_instance.FileObjects.Count(FileStatus.succeeded)}]: {uriFile}", ConsoleColor.Green);
+                }
+                else
+                {
+                    Log.Info($"file upload to kusto succeeded:adding relativeuri fileObject[{_instance.FileObjects.Count(FileStatus.succeeded)}]: {uriFile}", ConsoleColor.Green);
+                    _instance.FileObjects.Add(fileObject);
                 }
             }
+
             Log.Debug($"files ingested:{successUris.Count}");
         }
 
@@ -330,20 +344,15 @@ namespace CollectSFData.Kusto
 
         private void PostMessageToQueue(string queueUriWithSas, KustoIngestionMessage message, FileObject fileObject)
         {
-            Log.Info($"post: {queueUriWithSas}", ConsoleColor.Magenta);
-            _totalBlobIngestQueued++;
-
+            Log.Info($"post: {queueUriWithSas ?? "(null ingest uri)"}", ConsoleColor.Magenta);
             CloudQueue queue = new CloudQueue(new Uri(queueUriWithSas));
             CloudQueueMessage queueMessage = new CloudQueueMessage(JsonConvert.SerializeObject(message));
-
-            OperationContext context = new OperationContext()
-            {
-                ClientRequestID = message.Id,
-            };
+            OperationContext context = new OperationContext() { ClientRequestID = message.Id };
 
             queue.AddMessage(queueMessage, _messageTimeToLive, null, null, context);
-            IngestFileObjectsPending.Add(fileObject.FileUri, fileObject.RelativeUri, message.Id);
-            Log.Info($"IngestFileObjectsPending.Add fileobject to pending queue FileUri: {fileObject.FileUri} RelativeUri: {fileObject.RelativeUri} message id: {message.Id}");
+            fileObject.Status = FileStatus.uploading;
+            fileObject.MessageId = message.Id;
+            Log.Info($"fileobject uploading FileUri:{fileObject.FileUri} RelativeUri: {fileObject.RelativeUri} message id: {message.Id}", ConsoleColor.Cyan);
         }
 
         private KustoIngestionMessage PrepareIngestionMessage(string blobUriWithSas, long blobSizeBytes, string ingestionMapping)
@@ -360,12 +369,12 @@ namespace CollectSFData.Kusto
                 RetainBlobOnSuccess = true,
                 Format = FileExtensionTypesEnum.csv.ToString(),
                 FlushImmediately = true,
-                ReportLevel = Config.KustoUseIngestMessage ? 2 : 1, //(int)IngestionReportLevel.FailuresAndSuccesses, // 2 FailuresAndSuccesses, 0 failures, 1 none
-                ReportMethod = Convert.ToInt32(!Config.KustoUseIngestMessage), //(int)IngestionReportMethod.Table, // 0 queue, 1 table, 2 both
+                ReportLevel = _config.KustoUseIngestMessage ? 2 : 1, //(int)IngestionReportLevel.FailuresAndSuccesses, // 2 FailuresAndSuccesses, 0 failures, 1 none
+                ReportMethod = Convert.ToInt32(!_config.KustoUseIngestMessage), //(int)IngestionReportMethod.Table, // 0 queue, 1 table, 2 both
                 AdditionalProperties = new KustoAdditionalProperties()
                 {
                     authorizationContext = Endpoint.IdentityToken,
-                    compressed = Config.KustoCompressed,
+                    compressed = _config.KustoCompressed,
                     csvMapping = ingestionMapping
                 }
             };
@@ -376,18 +385,18 @@ namespace CollectSFData.Kusto
 
         private void Purge()
         {
-            if (Config.KustoPurge.ToLower() == "true" & Endpoint.HasTable(Config.KustoTable))
+            if (_config.KustoPurge.ToLower() == "true" & Endpoint.HasTable(_config.KustoTable))
             {
                 PurgeMessages(Endpoint.TableName);
                 Endpoint.DropTable(Endpoint.TableName);
             }
-            else if (Config.KustoPurge.ToLower().StartsWith("list"))
+            else if (_config.KustoPurge.ToLower().StartsWith("list"))
             {
                 List<string> results = new List<string>();
 
-                if (Config.KustoPurge.ToLower().Split(' ').Length > 1)
+                if (_config.KustoPurge.ToLower().Split(' ').Length > 1)
                 {
-                    results = Endpoint.Query($".show tables | where TableName contains {Config.KustoPurge.ToLower().Split(' ')[1]} | project TableName");
+                    results = Endpoint.Query($".show tables | where TableName contains {_config.KustoPurge.ToLower().Split(' ')[1]} | project TableName");
                 }
                 else
                 {
@@ -396,14 +405,14 @@ namespace CollectSFData.Kusto
 
                 Log.Info($"current table list:", results);
             }
-            else if (Endpoint.HasTable(Config.KustoPurge))
+            else if (Endpoint.HasTable(_config.KustoPurge))
             {
-                PurgeMessages(Config.KustoPurge);
-                Endpoint.DropTable(Config.KustoPurge);
+                PurgeMessages(_config.KustoPurge);
+                Endpoint.DropTable(_config.KustoPurge);
             }
             else
             {
-                Log.Error($"invalid purge option:{Config.KustoPurge}. should be 'true' or 'list' or table name to drop");
+                Log.Error($"invalid purge option:{_config.KustoPurge}. should be 'true' or 'list' or table name to drop");
             }
         }
 
@@ -463,13 +472,13 @@ namespace CollectSFData.Kusto
                 {
                     KustoSuccessMessage message = JsonConvert.DeserializeObject<KustoSuccessMessage>(success.AsString);
                     Log.Debug("success:", message);
+                    FileObject fileObject = _instance.FileObjects.FindByMessageId(message.IngestionSourceId);
 
-                    if (IngestFileObjectsPending.Exists(x => x.Equals(message.IngestionSourceId)))
+                    if (fileObject.IsPopulated)
                     {
-                        IngestFileObjectsPending.Remove(message.IngestionSourceId);
+                        fileObject.Status = FileStatus.succeeded;
                         RemoveMessageFromQueue(Endpoint.IngestionResources.SuccessNotificationsQueue, success);
-                        _totalBlobIngestResults++;
-                        Log.Info($"Ingestion completed total:({_totalBlobIngestResults}/{_totalBlobIngestQueued}): {JsonConvert.DeserializeObject(success.AsString)}", ConsoleColor.Green);
+                        Log.Info($"Ingestion completed total:({_instance.FileObjects.Count()}/{_instance.FileObjects.Count(FileStatus.uploading)}): {JsonConvert.DeserializeObject(success.AsString)}", ConsoleColor.Green);
                     }
                     else if (message.SucceededOn + _messageTimeToLive < DateTime.Now)
                     {
@@ -494,14 +503,13 @@ namespace CollectSFData.Kusto
                 {
                     KustoErrorMessage message = JsonConvert.DeserializeObject<KustoErrorMessage>(error.AsString);
                     Log.Debug("error:", message);
+                    FileObject fileObject = _instance.FileObjects.FindByMessageId(message.IngestionSourceId);
 
-                    if (IngestFileObjectsPending.Exists(x => x.Equals(message.IngestionSourceId)))
+                    if (fileObject.IsPopulated)
                     {
-                        IngestFileObjectsPending.Remove(message.IngestionSourceId);
+                        fileObject.Status = FileStatus.failed;
                         RemoveMessageFromQueue(Endpoint.IngestionResources.FailureNotificationsQueue, error);
-                        _totalBlobIngestResults++;
-                        _failureCount++;
-                        Log.Error($"Ingestion error total:({_failureCount}): {JsonConvert.DeserializeObject(error.AsString)}");
+                        Log.Error($"Ingestion error total:({_instance.FileObjects.Count(FileStatus.failed)}): {JsonConvert.DeserializeObject(error.AsString)}");
                     }
                     else if (message.FailedOn + _messageTimeToLive < DateTime.Now)
                     {
@@ -518,19 +526,27 @@ namespace CollectSFData.Kusto
 
         private void QueueMonitor()
         {
-            while ((!_tokenSource.IsCancellationRequested | IngestFileObjectsPending.Any()) & !_kustoTasks.IsCancellationRequested)
+            while ((!_tokenSource.IsCancellationRequested | _instance.FileObjects.Count(FileStatus.uploading) > 0) & !_kustoTasks.CancellationToken.IsCancellationRequested)
             {
-                Thread.Sleep(ThreadSleepMs100);
+                Thread.Sleep(Constants.ThreadSleepMs100);
                 QueueMessageMonitor();
 
-                if (!Config.KustoUseIngestMessage)
+                if (!_config.KustoUseIngestMessage)
                 {
-                    Thread.Sleep(ThreadSleepMs10000);
-                    IngestStatusQuery();
+                    Thread.Sleep(Constants.ThreadSleepMs10000);
+
+                    if (!Endpoint.HasTable(Endpoint.TableName))
+                    {
+                        continue;
+                    }
+
+                    IngestStatusSuccessQuery();
+                    IngestStatusFailQuery();
+                    Log.Info(_instance.FileObjects.StatusString(), ConsoleColor.Green);
                 }
             }
 
-            Log.Info($"exiting {IngestFileObjectsPending.Count()}", IngestFileObjectsPending);
+            Log.Info($"exiting {_instance.FileObjects.Count(FileStatus.uploading)}", _instance.FileObjects.FindAll(FileStatus.uploading));
         }
 
         private void RemoveMessageFromQueue(string queueUriWithSas, CloudQueueMessage message)
@@ -551,13 +567,13 @@ namespace CollectSFData.Kusto
         {
             string ingestionJsonString = null;
 
-            switch (Config.FileType)
+            switch (_config.FileType)
             {
                 case FileTypesEnum.counter:
                     ingestionJsonString = JsonConvert.SerializeObject(new KustoIngestionMappings(fileObject)
                     {
-                        ResourceUri = Config.ResourceUri,
-                        SetConstants = Config.KustoUseBlobAsSource,
+                        ResourceUri = _config.ResourceUri,
+                        SetConstants = _config.KustoUseBlobAsSource,
                     }.CounterSchema());
 
                     break;
@@ -565,8 +581,8 @@ namespace CollectSFData.Kusto
                 case FileTypesEnum.exception:
                     ingestionJsonString = JsonConvert.SerializeObject(new KustoIngestionMappings(fileObject)
                     {
-                        ResourceUri = Config.ResourceUri,
-                        SetConstants = Config.KustoUseBlobAsSource,
+                        ResourceUri = _config.ResourceUri,
+                        SetConstants = _config.KustoUseBlobAsSource,
                     }.ExceptionSchema());
 
                     break;
@@ -574,8 +590,8 @@ namespace CollectSFData.Kusto
                 case FileTypesEnum.setup:
                     ingestionJsonString = JsonConvert.SerializeObject(new KustoIngestionMappings(fileObject)
                     {
-                        ResourceUri = Config.ResourceUri,
-                        SetConstants = Config.KustoUseBlobAsSource,
+                        ResourceUri = _config.ResourceUri,
+                        SetConstants = _config.KustoUseBlobAsSource,
                     }.SetupSchema());
 
                     break;
@@ -583,7 +599,7 @@ namespace CollectSFData.Kusto
                 case FileTypesEnum.table:
                     ingestionJsonString = JsonConvert.SerializeObject(new KustoIngestionMappings(fileObject)
                     {
-                        ResourceUri = Config.ResourceUri
+                        ResourceUri = _config.ResourceUri
                     }.TableSchema());
 
                     break;
@@ -591,8 +607,8 @@ namespace CollectSFData.Kusto
                 case FileTypesEnum.trace:
                     ingestionJsonString = JsonConvert.SerializeObject(new KustoIngestionMappings(fileObject)
                     {
-                        ResourceUri = Config.ResourceUri,
-                        SetConstants = Config.KustoUseBlobAsSource,
+                        ResourceUri = _config.ResourceUri,
+                        SetConstants = _config.KustoUseBlobAsSource,
                     }.TraceSchema());
 
                     break;
@@ -609,15 +625,15 @@ namespace CollectSFData.Kusto
             BlobRequestOptions blobRequestOptions = new BlobRequestOptions()
             {
                 RetryPolicy = new IngestRetryPolicy(),
-                ParallelOperationThreadCount = Config.Threads,
+                ParallelOperationThreadCount = _config.Threads,
             };
 
             CloudBlobContainer blobContainer = new CloudBlobContainer(blobUri);
             CloudBlockBlob blockBlob = blobContainer.GetBlockBlobReference(blobName);
 
-            if (!_kustoTasks.IsCancellationRequested)
+            if (!_kustoTasks.CancellationToken.IsCancellationRequested)
             {
-                if (Config.UseMemoryStream)
+                if (_config.UseMemoryStream)
                 {
                     _kustoTasks.TaskAction(() => blockBlob.UploadFromStreamAsync(fileObject.Stream.Get(), null, blobRequestOptions, null).Wait()).Wait();
                     fileObject.Stream.Dispose();

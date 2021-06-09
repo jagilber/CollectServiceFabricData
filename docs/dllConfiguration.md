@@ -1,188 +1,274 @@
 # CollectServiceFabricData DLL Configuration and Usage
 
-## Outline
-
-[Overview](#overview)  
-[Design](#design)  
-[Supported Configurations](#supported-configurations)  
-[Adding NuGet package to project](#adding-nuget-package-to-project)  
-[Implementing Collector](#implementing-collector)  
-[Reuse](#reuse)  
-[Logging](#logging)  
-[Troubleshooting](#troubleshooting)  
-[Current Issues](#current-issues)  
-
 ## Overview
 
-CollectSFData can be used as an exe or as a dll from Microsoft signed nuget package [Microsoft.ServiceFabric.CollectSFData](https://www.nuget.org/packages/Microsoft.ServiceFabric.CollectSFData/). To use as an exe, see [configuration](./configuration.md).
+CollectSFData can be used as an exe or as a dll from Microsoft signed nuget package [Microsoft.ServiceFabric.CollectSFData](https://www.nuget.org/packages/Microsoft.ServiceFabric.CollectSFData/).  
+To use as an exe, see [configuration](./configuration.md).  
 
 ## Design
 
-CollectSFData is a high performance multi-threaded binary with a custom task scheduler. The 'Instance' state class is a singleton. Collector is reusable by calling Collect() multiple times, but only one instance of Collector should be used concurrently.  
+CollectSFData is a high performance multi-threaded binary with a custom task scheduler.  
+Using as a dll, Collector() is reusable but only one instance of Collector should be used concurrently.
+
+The 'Collector' class is the main class used to control collection of data.
+The 'ConfigurationOptions' class is used to configure the collection.
+The 'Instance' class is a singleton that contains information and configuration about current collection.
+
+If Collect() succeeds, 0 is returned, if fails return is > 0.
+After Collect() has been called, both Instance and ConfigurationOptions can be used to review results.
 
 ## Supported Configurations
 
 The below configurations are currently supported.
 
-### .Net Framework
-
-#### Windows
-
+.Net Framework 4.6.2
 .Net Framework 4.7.2+
-
-### .Net Core
-
-#### Windows
-
-.Net Core 3.1+
-.Net 5.0+
-
-#### Windows Container
-
-Supports GatherType 'counter' performance counter logs with beta option 'UseTx' == true.
-
-.Net Core 3.1+
-.Net 5.0+
-
-#### Linux
-
-Does not support GatherType 'counter' performance counter logs.
-
-.Net Core 3.1+
+.Net Core 3.1
 .Net 5.0+
 
 ## Adding NuGet package to project
 
-From command line, to add Microsoft.ServiceFabric.CollectSFData nuget package, navigate to download on nuget.org and use one of the provided commands [Microsoft.ServiceFabric.CollectSFData](https://www.nuget.org/packages/Microsoft.ServiceFabric.CollectSFData/).  
+From command line, to add Microsoft.ServiceFabric.CollectSFData nuget package, navigate to download on nuget.org  
+Use one of the provided commands [Microsoft.ServiceFabric.CollectSFData](https://www.nuget.org/packages/Microsoft.ServiceFabric.CollectSFData/).  
 
-In Visual Studio, use 'NuGet Package Manager' to install package.
+In Visual Studio, use 'NuGet Package Manager' to install package.  
 
-## Kusto Setup
 
-### Creating Kusto Cluster
 
-(todo: see scripts directory)
+#### **Configuration of X509Certificate2 directly**
 
-### Headless Execution with Client Credentials
+example setting ConfigurationOptions.ClientCertificate with private key password using CertificateUtilities.  
 
-Use these steps to optionally configure CollectSFData to run headless with client credentials and client certificate. 
+```c#
+private static int Main(string[] args)
+{
+    string unsafePassword = args[0];
+    string base64String = args[1];
 
-#### Configuration of Azure Active Directory App Registration
+    Collector collector = new Collector(true);
+    ConfigurationOptions config = new ConfigurationOptions();
+    CertificateUtilities utils = new CertificateUtilities();
+    utils.SetSecurePassword(unsafePassword);
+    config.ClientCertificate = utils.GetClientCertificate(base64String);
 
-#### Configuration of Client Certificate
+    if (!config.Validate())
+    {
+        collector.Close();
+        return 1;
+    }
+
+    int retval = collector.Collect(config);
+    return retval;
+}
+```
+
+example setting ConfigurationOptions.ClientCertificate with private key password using X509Certificate.  
+
+```c#
+private static int Main(string[] args)
+{
+    string unsafePassword = args[0];
+    string fileName = args[1];
+
+    Collector collector = new Collector(true);
+    ConfigurationOptions config = new ConfigurationOptions();
+    config.ClientCertificate = new X509Certificate2(fileName, unsafePassword);
+
+    if (!config.Validate())
+    {
+        collector.Close();
+        return 1;
+    }
+
+    int retval = collector.Collect(config);
+    return retval;
+}
+```
 
 ## Implementing Collector
 
-After CollectSFData nuget package has been added to project, use the following information to implement. The main classes are 'Collector' for execution and 'ConfigurationOptions' for configuration.
+After CollectSFData nuget package has been added to project, use the following information to implement.  
+The main classes are 'Collector' for execution and 'ConfigurationOptions' for configuration.  
+See [program.cs](../src/CollectSFData/Program.cs) for example.  
 
-### Setting Configuration
+### **Setting Configuration**
 
-Minimum configuration has to be set before calling Collector.Collect(). The main configuration is the type of data to collect with configuration option 'GatherType'. Configuration can be set by command line arguments, configuration file, or by using ConfigurationOptions class before calling Collector.Collect(). See [configuration](./configuration.md).
+Minimum configuration has to be set before calling Collector.Collect().  
+The main configuration is the type of data to collect with configuration option 'GatherType' and time.  
+Configuration can be set by commandline arguments, configuration file, or by setting ConfigurationOptions class properties before calling Collector.Collect().  
+See [configuration](./configuration.md).
 
-ConfigurationOptions constructor can be used to pass commandline 'args'. Default option file 'collectsfdata.options.json' and 'args' if any will be added to a static base DefaultConfiguration. Use GetDefaultConfiguration() and SetDefaultConfiguration() if modification is needed.
+ConfigurationOptions constructor can be used to pass commandline 'args' and option to validate.  
+Default option file 'collectsfdata.options.json' and 'args' if any will be added to a static base DefaultConfiguration.  
+Use GetDefaultConfiguration() and SetDefaultConfiguration() if modification of default configuration is needed.
 
-#### Example ConfigurationOptions default Constructor
+Configuration validation can be performed in ConfigurationOptions constructor, or after additional configurations by using Validate().  
+Collector.Collect() will also perform validation of configuration if NeedsValidation is true.  
+
+#### **Example ConfigurationOptions default Constructor with no commandline arguments or validation**
+
+Validation will not occur until config.Validate() is called or Collector.Collect()
 
 ```c#
 ConfigurationOptions config = new ConfigurationOptions();
 ```
 
-#### Example to use ConfigurationOptions constructor passing command line arguments from Main(string[] args)
+#### **Example to use ConfigurationOptions constructor passing command line arguments from Main(string[] args)**
+
+To use commandline arguments, pass as argument to ConfigurationOptions constructor. Command line arguments can only be parsed once. These options will be applied to the default configuration for any new instances on top of any settings specified in collectsfdata.options.json. 
 
 ```c#
 ConfigurationOptions config = new ConfigurationOptions(args);
+config.UseBlobAsSource = false;
+config.Validate();
 ```
 
-#### Example to reuse existing configuration after collect using Clone()
+To validate configuration without further configuration, set validate argument to true.
+
+```c#
+ConfigurationOptions config = new ConfigurationOptions(args,true);
+```
+
+#### **Example to reuse existing configuration after collect using Clone()**
+
+To reuse or keep last configuration, Config.Clone() can be used.
 
 ```c#
 ConfigurationOptions config = collector.Config.Clone();
 ```
 
-#### Example to reuse existing configuration after collect using Clone()
+#### **Example to override DefaultConfiguration**
+
+Base default static configuration will contain any settings from collectsfdata.options.json. If commandline arguments are supplied to ConfigurationOptions constructor, these settings will be added to the default configuration superseding options from json file. To modify default configuration used for all instances, use SetDefaultConfiguration().
 
 ```c#
-ConfigurationOptions config = collector.Config.Clone();
+collector.Config.SetDefaultConfiguration(config);
 ```
 
-### Calling Collector.Collect()
+#### **Example to check if current configuration is valid**
 
-Once configuration options have been set, call Collector.Collect(). 
-Collect can optionally be passed ConfigurationsOptions for queueing multiple configurations to collect.
-Use Clone() to create a shallow copy of existing configuration.
+```c#
+ConfigurationOptions config = new ConfigurationOptions(args);
+// make changes to config properties
+bool retval = config.Validate();
+```
 
-See examples below on how to use:
+```c#
+ConfigurationOptions config = new ConfigurationOptions(args,true);
+bool retval = config.IsValid;
+```
+
+### **Calling Collector.Collect()**
+
+Once configuration options have been set, call Collector.Collect().
+Collect uses Collector.Config for configuration by default and can also be passed ConfigurationsOptions with current configuration to collect.
+If configuration has not been validated, Collect() will validate configuration.
 
 #### Example
 
 ```c#
 private static int Main(string[] args)
 {
-        Collector collector = new Collector(args, true);
-        ConfigurationOptions config = new ConfigurationOptions();
+    Collector collector = new Collector(true);
+    ConfigurationOptions config = new ConfigurationOptions(args);
 
-        config.GatherType = FileTypesEnum.counter.ToString();
-        config.UseMemoryStream = true;
-        config.KustoCluster = "https://ingest-sfcluster.kusto.windows.net/sfdatabase";
-        config.KustoTable = "sfclusterlogs";
-        config.KustoRecreateTable = true;
-        config.LogDebug = 5;
-        config.LogFile = "c:\\temp\\csfd.3.log";
+    config.GatherType = FileTypesEnum.counter.ToString();
+    config.UseMemoryStream = true;
+    config.KustoCluster = "https://ingest-sfcluster.kusto.windows.net/sfdatabase";
+    config.KustoTable = "sfclusterlogs";
+    config.KustoRecreateTable = true;
+    config.LogDebug = 5;
+    config.LogFile = "c:\\temp\\csfd.3.log";
 
-        return collector.Collect(config);
+    return collector.Collect(config);
 }
 ```
 
 #### Example
 
 ```c#
+using CollectSFData.Common;
+
 private static int Main(string[] args)
 {
-        Collector collector = new Collector(args, true);
-        ConfigurationOptions config = collector.Config;
+    Collector collector = new Collector();
+    ConfigurationOptions config = collector.Config;
 
-        config.GatherType = "trace";
-        config.UseMemoryStream = true;
-        config.KustoCluster = "https://ingest-sfcluster.kusto.windows.net/sfdatabase";
-        config.KustoTable = "sfclusterlogs";
-        config.KustoRecreateTable = true;
-        config.LogDebug = 5;
-        config.LogFile = null;
-        //config.Validate();
+    config.GatherType = "trace";
+    config.UseMemoryStream = true;
+    config.KustoCluster = "https://ingest-sfcluster.kusto.windows.net/sfdatabase";
+    config.KustoTable = "sfclusterlogs";
+    config.KustoRecreateTable = true;
+    config.LogDebug = 5;
+    config.LogFile = null;
+    config.Validate();
 
-        return collector.Collect();
+    return collector.Collect();
 }
 ```
 
 #### Example
 
 ```c#
+using CollectSFData.Common;
+
 private static int Main(string[] args)
 {
-        Collector collector = new Collector(args, true);
-        ConfigurationOptions config = collector.Config.Clone();
+    Collector collector = new Collector(true);
+    ConfigurationOptions config = collector.Config.Clone();
 
-        config.GatherType = FileTypesEnum.counter.ToString();
-        config.UseMemoryStream = true;
-        config.KustoCluster = "https://ingest-sfcluster.kusto.windows.net/sfdatabase";
-        config.KustoTable = "sfclusterlogs";
-        config.KustoRecreateTable = true;
-        config.LogDebug = 5;
-        config.LogFile = "c:\\temp\\csfd.3.log";
-        //config.Validate();
+    config.GatherType = FileTypesEnum.counter.ToString();
+    config.UseMemoryStream = true;
+    config.KustoCluster = "https://ingest-sfcluster.kusto.windows.net/sfdatabase";
+    config.KustoTable = "sfclusterlogs";
+    config.KustoRecreateTable = true;
+    config.LogDebug = 5;
+    config.LogFile = "c:\\temp\\csfd.3.log";
 
-        return collector.Collect(config);
+    return collector.Collect(config);
+}
+```
+
+## Instance Results
+
+After Collect() is called, all instance information is in Collector.Instance class.
+Instance.FileObjects contains all files processed and their current state.
+After Collect() has returned, final state can be checked.
+
+example:
+
+```c#
+int retval = collector.Collect(config);
+FileObjectCollection fileObjects = collector.Instance.FileObjects.Any(FileStatus.failed | FileStatus.uploading)
+```
+
+Each fileObject will have one of the following flag enum states:
+
+```c#
+[Flags]
+public enum FileStatus : int
+{
+    unknown = 0,
+    enumerated = 1, // found in blob storage or locally
+    existing = 2, // already ingested into table
+    queued = 4, // queued for download
+    downloading = 8, // downloading from blob storage
+    formatting = 16, // formatting into csv
+    uploading = 32, // uploading to kusto table
+    failed = 64, // ingest into kusto failed
+    succeeded = 128, // ingest into kusto succeeded
+    all = 256
 }
 ```
 
 ## Logging
 
-Externally there is logging both to console output and optionally to a log file. When using as a DLL, subscribing to event 'Log_MessageLogged' will provide the same information in 'LogMessage' object format. See examples above and below.
+Externally there is logging both to console output and optionally to a log file. When using as a DLL, subscribing to event 'Log_MessageLogged' will provide the same information in 'LogMessage' object format.  
 
 ### Example
 
-
 LogMessage Callback
+
 ```c#
 Log.MessageLogged += Log_MessageLogged;
 
@@ -193,6 +279,7 @@ private static void Log_MessageLogged(object sender, LogMessage args)
 ```
 
 LogMessage Class
+
 ```c#
 public class LogMessage : EventArgs
 {
@@ -215,37 +302,33 @@ When starting execution from Collect(), current configuration is first validated
 
 ### CSV log file compliance for GatherType trace
 
-Certain events in the Service Fabric detailed diagnostic logs gathered when 'GatherType' is set to 'trace' are not CSV compliant and can fail ingestion into Kusto. Current mitigation until these traces are properly formatted is to either set 'UseKustoBlobAsSource' == false which is remarkably slow and more resource intensive. Another option is to do two collections with Collect() as shown in the following example assuming there will be a small number of failures during first collect. This is how CollectSFData currently executes when executing as an exe. See [Program.cs](..\src\CollectSFData\Program.cs).  
+Certain events in the Service Fabric detailed diagnostic logs gathered when 'GatherType' is set to 'trace' are not CSV compliant and can fail ingestion into Kusto. Current mitigation until these traces are properly formatted is to either set 'UseKustoBlobAsSource' == false which is remarkably slow and more resource intensive. Another option is to do two collections with Collect() as shown in the following example assuming there will be a small number of failures during first collect. This is how CollectSFData currently executes when executing as an exe. See [Program.cs](../src/CollectSFData/Program.cs).  
 
 ```c#
+using CollectSFData.Common;
+
 private static int Main(string[] args)
 {
-    Collector collector = new Collector(args, true);
-    ConfigurationOptions config = collector.Instance.Config;
+    Collector collector = new Collector(true);
+    ConfigurationOptions config = new ConfigurationOptions(args);
 
-    int retval = collector.Collect();
+    int retval = collector.Collect(config);
 
     // mitigation for dtr files not being csv compliant causing kusto ingest to fail
-    if ((collector.Instance.Kusto.IngestFileObjectsFailed.Count() > 0
-        | collector.Instance.Kusto.IngestFileObjectsPending.Count() > 0)
-        && config.IsKustoConfigured()
+    config = collector.Config.Clone();
+    if (config.IsKustoConfigured()
+        && (collector.Instance.Kusto.IngestFileObjectsFailed.Any() | collector.Instance.Kusto.IngestFileObjectsPending.Any())
         && config.KustoUseBlobAsSource == true
         && config.FileType == DataFile.FileTypesEnum.trace)
     {
-        KustoConnection kusto = collector.Instance.Kusto;
         Log.Warning("failed ingests due to csv compliance. restarting.");
 
         // change config to download files to parse and fix csv fields
         config.KustoUseBlobAsSource = false;
         config.KustoRecreateTable = false;
 
-        List<string> ingestList = kusto.IngestFileObjectsFailed.Select(x => x.FileUri).ToList();
-        ingestList.AddRange(kusto.IngestFileObjectsPending.Select(x => x.FileUri));
-        config.FileUris = ingestList.ToArray();
-
-        retval = collector.Collect();
+        retval = collector.Collect(config);
     }
-
     return retval;
 }
 ```

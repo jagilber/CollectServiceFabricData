@@ -32,6 +32,7 @@ namespace CollectSFData.DataFile
         blg,
         dmp,
         dtr,
+        etl,
         json,
         trace,
         zip
@@ -51,14 +52,70 @@ namespace CollectSFData.DataFile
     public enum FileUriTypesEnum
     {
         unknown,
-        azureUri,
+        azureStorageUri,
         fileUri,
-        httpUri
+        httpUri,
+        azureKeyVaultUri
     }
 
     public static class FileTypes
     {
         private static readonly string[] _fileDataTypes = Enum.GetNames(typeof(FileDataTypesEnum));
+
+        public static FileDataTypesEnum MapFileDataTypeExtension(string fileUri)
+        {
+            string file = fileUri?.ToLower();
+            FileDataTypesEnum extension = FileDataTypesEnum.unknown;
+
+            if (file == null)
+            {
+            }
+            else if (fileUri.EndsWith(Constants.PerfCsvExtension) | fileUri.EndsWith(Constants.PerfCtrExtension))
+            {
+                extension = FileDataTypesEnum.counter;
+            }
+            else if (fileUri.EndsWith(Constants.TableExtension))
+            {
+                extension = FileDataTypesEnum.table;
+            }
+            else if (fileUri.EndsWith(Constants.DumpExtension))
+            {
+                extension = FileDataTypesEnum.fabriccrashdumps;
+            }
+            else if (fileUri.EndsWith(Constants.ZipExtension) | fileUri.EndsWith(Constants.DtrExtension))
+            {
+                // using default fabric / lease
+                extension = FileDataTypesEnum.fabric;
+            }
+            else if (fileUri.EndsWith(Constants.SetupExtension))
+            {
+                // using default fabricsetup / fabricdeployer
+                extension = FileDataTypesEnum.fabricsetup;
+            }
+            else if (fileUri.EndsWith(Constants.ZipExtension))
+            {
+                // todo: implement
+                extension = FileDataTypesEnum.unknown;
+            }
+            else if (fileUri.EndsWith(Constants.JsonExtension))
+            {
+                // todo: implement
+                extension = FileDataTypesEnum.unknown;
+            }
+            else if (fileUri.EndsWith(Constants.EtlExtension))
+            {
+                // todo: implement
+                extension = FileDataTypesEnum.unknown;
+            }
+            else if (fileUri.EndsWith(Constants.CsvExtension))
+            {
+                // todo: implement
+                extension = FileDataTypesEnum.unknown;
+            }
+
+            Log.Debug($"returning {extension}");
+            return extension;
+        }
 
         public static FileDataTypesEnum MapFileDataTypeUri(string fileUri)
         {
@@ -110,80 +167,39 @@ namespace CollectSFData.DataFile
             return fileDataType;
         }
 
-        public static FileDataTypesEnum MapFileDataTypeExtension(string fileUri)
+        public static string MapFileTypeRelativeUriPrefix(FileTypesEnum fileType)
         {
-            FileDataTypesEnum extension = FileDataTypesEnum.unknown;
-            switch (Path.GetExtension(fileUri.ToLower()))
+            string knownPrefix = string.Empty;
+
+            switch (fileType)
             {
-                case Constants.PerfCsvExtension:
-                case Constants.PerfCtrExtension:
-                    {
-                        extension = FileDataTypesEnum.counter;
-                        break;
-                    }
+                case FileTypesEnum.any:
+                    knownPrefix = FileTypesKnownUrisPrefix.any;
+                    Log.Warning($"returning FileTypesKnownUrisPrefix.{knownPrefix}");
+                    break;
 
-                case Constants.TableExtension:
-                    {
-                        extension = FileDataTypesEnum.table;
-                        break;
-                    }
+                case FileTypesEnum.counter:
+                    knownPrefix = FileTypesKnownUrisPrefix.fabriccounter;
+                    break;
 
-                case Constants.DumpExtension:
-                    {
-                        extension = FileDataTypesEnum.fabriccrashdumps;
-                        break;
-                    }
+                case FileTypesEnum.exception:
+                    knownPrefix = FileTypesKnownUrisPrefix.fabriccrashdump;
+                    break;
 
-                case Constants.TraceZipExtension:
-                case Constants.TraceFileExtension:
-                    {
-                        // using default fabric / lease
-                        extension = FileDataTypesEnum.fabric;
-                        break;
-                    }
-
-                case Constants.SetupExtension:
-                    {
-                        // using default fabricsetup / fabricdeployer
-                        extension = FileDataTypesEnum.fabricsetup;
-                        break;
-                    }
-
-                case Constants.ZipExtension:
-                    {
-                        // todo: implement
-                        extension = FileDataTypesEnum.unknown;
-                        break;
-                    }
-
-                case Constants.JsonExtension:
-                    {
-                        // todo: implement
-                        extension = FileDataTypesEnum.unknown;
-                        break;
-                    }
-                case Constants.EtlExtension:
-                    {
-                        // todo: implement
-                        extension = FileDataTypesEnum.unknown;
-                        break;
-                    }
-                case Constants.CsvExtension:
-                    {
-                        // todo: implement
-                        extension = FileDataTypesEnum.unknown;
-                        break;
-                    }
+                case FileTypesEnum.setup:
+                case FileTypesEnum.table:
+                case FileTypesEnum.trace:
+                    knownPrefix = FileTypesKnownUrisPrefix.fabriclog;
+                    break;
 
                 default:
-                    {
-                        extension = FileDataTypesEnum.unknown;
-                        break;
-                    }
+                    knownPrefix = FileTypesKnownUrisPrefix.unknown;
+                    Log.Warning($"returning FileTypesKnownUrisPrefix.{knownPrefix}");
+                    break;
             }
 
-            Log.Debug($"returning {extension}");
-            return extension;
+            Log.Debug($"returning FileTypesKnownUrisPrefix.{knownPrefix}");
+            return knownPrefix;
         }
 
         public static FileTypesEnum MapFileTypeUri(string fileUri)
@@ -248,51 +264,26 @@ namespace CollectSFData.DataFile
 
                 if (fileUri.ToLower().Contains(Constants.AzureStorageSuffix))
                 {
-                    fileUriTypesEnum = FileUriTypesEnum.azureUri;
+                    fileUriTypesEnum = FileUriTypesEnum.azureStorageUri;
+                }
+
+                if (fileUri.ToLower().Contains(Constants.AzureKeyVaultSuffix))
+                {
+                    fileUriTypesEnum = FileUriTypesEnum.azureKeyVaultUri;
                 }
             }
             else
             {
-                fileUriTypesEnum = FileUriTypesEnum.fileUri;
+                if (fileUri.IndexOfAny(Path.GetInvalidPathChars()) < 0
+                    && Path.GetPathRoot(fileUri).Length > 0 | fileUri.StartsWith(".")
+                    && Path.GetFileName(fileUri).IndexOfAny(Path.GetInvalidFileNameChars()) < 0)
+                {
+                    fileUriTypesEnum = FileUriTypesEnum.fileUri;
+                }
             }
 
             Log.Debug($"returning {fileUriTypesEnum}");
             return fileUriTypesEnum;
-        }
-
-        public static string MapFileTypeUriPrefix(FileTypesEnum fileType)
-        {
-            string knownPrefix = string.Empty;
-
-            switch (fileType)
-            {
-                case FileTypesEnum.any:
-                    knownPrefix = FileTypesKnownUrisPrefix.any;
-                    Log.Warning($"returning FileTypesKnownUrisPrefix.{knownPrefix}");
-                    break;
-
-                case FileTypesEnum.counter:
-                    knownPrefix = FileTypesKnownUrisPrefix.fabriccounter;
-                    break;
-
-                case FileTypesEnum.exception:
-                    knownPrefix = FileTypesKnownUrisPrefix.fabriccrashdump;
-                    break;
-
-                case FileTypesEnum.setup:
-                case FileTypesEnum.table:
-                case FileTypesEnum.trace:
-                    knownPrefix = FileTypesKnownUrisPrefix.fabriclog;
-                    break;
-
-                default:
-                    knownPrefix = FileTypesKnownUrisPrefix.unknown;
-                    Log.Warning($"returning FileTypesKnownUrisPrefix.{knownPrefix}");
-                    break;
-            }
-
-            Log.Debug($"returning FileTypesKnownUrisPrefix.{knownPrefix}");
-            return knownPrefix;
         }
 
         public static FileExtensionTypesEnum MapKnownFileExtension(string fileUri)
@@ -320,7 +311,12 @@ namespace CollectSFData.DataFile
                         break;
                     }
 
-                case Constants.TraceFileExtension:
+                case Constants.EtlExtension:
+                    {
+                        extension = FileExtensionTypesEnum.etl;
+                        break;
+                    }
+                case Constants.DtrExtension:
                     {
                         extension = FileExtensionTypesEnum.dtr;
                         break;

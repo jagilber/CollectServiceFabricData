@@ -13,17 +13,25 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using Tx.Windows;
+using Tools.EtlReader;
+using System.Fabric.Strings;
 
 namespace CollectSFData.DataFile
 {
-    public class FileManager : Constants
+    public class FileManager
     {
-        private readonly CustomTaskManager _fileTasks = new CustomTaskManager(true);
-        private Instance _instance = Instance.Singleton();
+        private readonly CustomTaskManager _fileTasks = new CustomTaskManager();
+        private ConfigurationOptions _config;
+        private Instance _instance;
         private object _lockObj = new object();
 
-        private ConfigurationOptions Config => _instance.Config;
+        public FileManager(Instance instance)
+        {
+            _instance = instance ?? throw new ArgumentNullException(nameof(instance));
+            _config = _instance.Config;
+        }
 
         public static string NormalizePath(string path, string directorySeparator = "/")
         {
@@ -57,114 +65,7 @@ namespace CollectSFData.DataFile
             return path;
         }
 
-        public FileObjectCollection ProcessFile(FileObject fileObject)
-        {
-            Log.Debug($"enter:{fileObject.FileUri}");
-
-            if (fileObject.DownloadAction != null)
-            {
-                Log.Info($"downloading:{fileObject.FileUri}", ConsoleColor.Cyan, ConsoleColor.DarkBlue);
-                _fileTasks.TaskAction(fileObject.DownloadAction).Wait();
-                Log.Info($"downloaded:{fileObject.FileUri}", ConsoleColor.DarkCyan, ConsoleColor.DarkBlue);
-            }
-
-            if (fileObject.DownloadAction != null && fileObject.Length < 1 && !fileObject.Exists)
-            {
-                string error = $"memoryStream does not exist and file does not exist {fileObject.FileUri}";
-                Log.Error(error);
-                throw new ArgumentException(error);
-            }
-
-            if (!fileObject.FileType.Equals(FileTypesEnum.any))
-            {
-                if (fileObject.Length < 1 & fileObject.Exists)
-                {
-                    // for cached directory uploads
-                    fileObject.Stream.ReadFromFile();
-                }
-
-                if (fileObject.FileExtensionType.Equals(FileExtensionTypesEnum.zip))
-                {
-                    fileObject.Stream.Decompress();
-                    SaveToCache(fileObject);
-                }
-            }
-
-            switch (fileObject.FileDataType)
-            {
-                case FileDataTypesEnum.unknown:
-                    {
-                        if (fileObject.FileType.Equals(FileTypesEnum.any))
-                        {
-                            SaveToCache(fileObject);
-                            return new FileObjectCollection();
-                        }
-
-                        Log.Warning("unknown file", fileObject);
-                        break;
-                    }
-                case FileDataTypesEnum.counter:
-                    {
-                        if (fileObject.FileExtensionType.Equals(FileExtensionTypesEnum.blg))
-                        {
-                            return FormatCounterFile(fileObject);
-                        }
-
-                        break;
-                    }
-                case FileDataTypesEnum.data:
-                case FileDataTypesEnum.fabriccrashdumps:
-                    {
-                        if (fileObject.FileExtensionType.Equals(FileExtensionTypesEnum.dmp))
-                        {
-                            return FormatExceptionFile(fileObject);
-                        }
-
-                        SaveToCache(fileObject);
-                        return new FileObjectCollection();
-                    }
-                case FileDataTypesEnum.fabric:
-                case FileDataTypesEnum.lease:
-                    {
-                        if (fileObject.FileExtensionType.Equals(FileExtensionTypesEnum.dtr))
-                        {
-                            return FormatDtrFile(fileObject);
-                        }
-
-                        break;
-                    }
-                case FileDataTypesEnum.bootstrap:
-                case FileDataTypesEnum.fabricsetup:
-                case FileDataTypesEnum.fabricdeployer:
-                    {
-                        if (fileObject.FileExtensionType.Equals(FileExtensionTypesEnum.trace))
-                        {
-                            return FormatSetupFile(fileObject);
-                        }
-
-                        break;
-                    }
-                case FileDataTypesEnum.table:
-                    {
-                        if (fileObject.FileExtensionType.Equals(FileExtensionTypesEnum.csv))
-                        {
-                            return FormatTableFile(fileObject);
-                        }
-
-                        break;
-                    }
-                default:
-                    {
-                        Log.Warning("unsupported file data type", fileObject.FileDataType);
-                        break;
-                    }
-            }
-
-            Log.Warning($"returning: empty fileObjectCollection for file: {fileObject.FileUri}");
-            return new FileObjectCollection();
-        }
-
-        private void DeleteFile(string fileUri)
+        public void DeleteFile(string fileUri)
         {
             if (File.Exists(fileUri))
             {
@@ -173,7 +74,7 @@ namespace CollectSFData.DataFile
             }
         }
 
-        private IList<CsvCounterRecord> ExtractPerfRelogCsvData(FileObject fileObject)
+        public IList<CsvCounterRecord> ExtractPerfRelogCsvData(FileObject fileObject)
         {
             List<CsvCounterRecord> csvRecords = new List<CsvCounterRecord>();
             string counterPattern = @"\\\\.+?\\(?<object>.+?)(?<instance>\(.*?\)){0,1}\\(?<counter>.+)";
@@ -230,17 +131,17 @@ namespace CollectSFData.DataFile
             }
         }
 
-        private FileObjectCollection FormatCounterFile(FileObject fileObject)
+        public FileObjectCollection FormatCounterFile(FileObject fileObject)
         {
             Log.Debug($"enter:{fileObject.FileUri}");
-            string outputFile = fileObject.FileUri + PerfCsvExtension;
+            string outputFile = fileObject.FileUri + Constants.PerfCsvExtension;
             bool result;
 
             fileObject.Stream.SaveToFile();
             DeleteFile(outputFile);
             Log.Info($"Writing {outputFile}");
 
-            if (Config.UseTx)
+            if (_config.UseTx)
             {
                 result = TxBlg(fileObject, outputFile);
             }
@@ -253,7 +154,7 @@ namespace CollectSFData.DataFile
             {
                 _instance.TotalFilesConverted++;
 
-                if (!Config.UseTx)
+                if (!_config.UseTx)
                 {
                     fileObject.Stream.ReadFromFile(outputFile);
                     fileObject.Stream.Write<CsvCounterRecord>(ExtractPerfRelogCsvData(fileObject));
@@ -266,7 +167,7 @@ namespace CollectSFData.DataFile
 
             DeleteFile(outputFile);
 
-            if (Config.UseMemoryStream | !Config.IsCacheLocationPreConfigured())
+            if (_config.UseMemoryStream | !_config.IsCacheLocationPreConfigured())
             {
                 DeleteFile(fileObject.FileUri);
             }
@@ -274,36 +175,66 @@ namespace CollectSFData.DataFile
             return PopulateCollection<CsvCounterRecord>(fileObject);
         }
 
-        private FileObjectCollection FormatDtrFile(FileObject fileObject)
+        public FileObjectCollection FormatDtrFile(FileObject fileObject)
         {
             return FormatTraceFile<DtrTraceRecord>(fileObject);
         }
 
-        private FileObjectCollection FormatExceptionFile(FileObject fileObject)
+        public FileObjectCollection FormatEtlFile(FileObject fileObject)
+        {
+            Log.Debug($"enter:{fileObject.FileUri}");
+            bool result;
+            fileObject.Stream.SaveToFile();
+            result = ReadEtl(fileObject);
+
+            //todo review
+            if (_config.DeleteCache && (_config.UseMemoryStream | !_config.IsCacheLocationPreConfigured()))
+            {
+                DeleteFile(fileObject.FileUri);
+            }
+
+            if (result)
+            {
+                _instance.TotalFilesConverted++;
+
+                // if (!Config.UseTx)
+                // {
+                //     fileObject.Stream.ReadFromFile(outputFile);
+                //     fileObject.Stream.Write<CsvCounterRecord>(ExtractPerfRelogCsvData(fileObject));
+                // }
+
+                return PopulateCollection<DtrTraceRecord>(fileObject);
+            }
+
+            _instance.TotalErrors++;
+            return new FileObjectCollection();
+        }
+
+        public FileObjectCollection FormatExceptionFile(FileObject fileObject)
         {
             Log.Debug($"enter:{fileObject.FileUri}");
             IList<CsvExceptionRecord> records = new List<CsvExceptionRecord>
             {
-                new CsvExceptionRecord($"{fileObject.FileUri}", fileObject, Config.ResourceUri)
+                new CsvExceptionRecord($"{fileObject.FileUri}", fileObject, _config.ResourceUri)
             };
 
-            Log.Last($"{fileObject.LastModified} {fileObject.FileUri}{Config.SasEndpointInfo.SasToken}", ConsoleColor.Cyan);
+            Log.Last($"{fileObject.LastModified} {fileObject.FileUri}{_config.SasEndpointInfo.SasToken}", ConsoleColor.Cyan);
             fileObject.Stream.Write(records);
             return PopulateCollection<CsvExceptionRecord>(fileObject);
         }
 
-        private FileObjectCollection FormatSetupFile(FileObject fileObject)
+        public FileObjectCollection FormatSetupFile(FileObject fileObject)
         {
             return FormatTraceFile<CsvSetupRecord>(fileObject);
         }
 
-        private FileObjectCollection FormatTableFile(FileObject fileObject)
+        public FileObjectCollection FormatTableFile(FileObject fileObject)
         {
             Log.Debug($"enter:{fileObject.FileUri}");
             return PopulateCollection<CsvTableRecord>(fileObject);
         }
 
-        private FileObjectCollection FormatTraceFile<T>(FileObject fileObject) where T : ITraceRecord, new()
+        public FileObjectCollection FormatTraceFile<T>(FileObject fileObject) where T : ITraceRecord, new()
         {
             Log.Debug($"enter:{fileObject.FileUri}");
             IList<IRecord> records = new List<IRecord>();
@@ -321,7 +252,7 @@ namespace CollectSFData.DataFile
                         // new record, write old record
                         if (record.Length > 0)
                         {
-                            records.Add(new T().Populate(fileObject, record, Config.ResourceUri));
+                            records.Add(new T().Populate(fileObject, record, _config.ResourceUri));
                         }
 
                         record = string.Empty;
@@ -333,7 +264,7 @@ namespace CollectSFData.DataFile
                 // last record
                 if (record.Length > 0)
                 {
-                    records.Add(new T().Populate(fileObject, record, Config.ResourceUri));
+                    records.Add(new T().Populate(fileObject, record, _config.ResourceUri));
                 }
 
                 Log.Debug($"finished format:{fileObject.FileUri}");
@@ -349,25 +280,25 @@ namespace CollectSFData.DataFile
             }
         }
 
-        private FileObjectCollection PopulateCollection<T>(FileObject fileObject) where T : IRecord
+        public FileObjectCollection PopulateCollection<T>(FileObject fileObject) where T : IRecord
         {
             FileObjectCollection collection = new FileObjectCollection() { fileObject };
             _instance.TotalFilesFormatted++;
             _instance.TotalRecords += fileObject.RecordCount;
 
-            if (Config.IsKustoConfigured())
+            if (_config.IsKustoConfigured())
             {
                 // kusto native format is Csv
                 // kusto json ingest is 2 to 3 times slower and does *not* use standard json format. uses json document per line no comma
                 // using csv and compression for best performance
                 collection = SerializeCsv<T>(fileObject);
 
-                if (Config.KustoCompressed)
+                if (_config.KustoCompressed)
                 {
                     collection.ForEach(x => x.Stream.Compress());
                 }
             }
-            else if (Config.IsLogAnalyticsConfigured())
+            else if (_config.IsLogAnalyticsConfigured())
             {
                 // la is kusto based but only accepts non compressed json format ingest
                 collection = SerializeJson<T>(fileObject);
@@ -377,15 +308,176 @@ namespace CollectSFData.DataFile
             return collection;
         }
 
-        private PerfCounterObserver<T> ReadCounterRecords<T>(IObservable<T> source)
+        public FileObjectCollection ProcessFile(FileObject fileObject)
         {
-            var observer = new PerfCounterObserver<T>();
+            Log.Debug($"enter:{fileObject.FileUri}");
+
+            if (fileObject.DownloadAction != null)
+            {
+                Log.Info($"downloading:{fileObject.FileUri}", ConsoleColor.Cyan, ConsoleColor.DarkBlue);
+                fileObject.Status = FileStatus.downloading;
+                _fileTasks.TaskAction(fileObject.DownloadAction).Wait();
+                Log.Info($"downloaded:{fileObject.FileUri}", ConsoleColor.DarkCyan, ConsoleColor.DarkBlue);
+            }
+
+            if (fileObject.DownloadAction != null && fileObject.Length < 1 && !fileObject.Exists)
+            {
+                string error = $"memoryStream does not exist and file does not exist {fileObject.FileUri}";
+                Log.Error(error);
+                throw new ArgumentException(error);
+            }
+
+            fileObject.Status = FileStatus.formatting;
+
+            if (!fileObject.FileType.Equals(FileTypesEnum.any))
+            {
+                if (fileObject.Length < 1 & fileObject.Exists)
+                {
+                    // for cached directory uploads
+                    fileObject.Stream.ReadFromFile();
+                }
+
+                if (fileObject.FileExtensionType.Equals(FileExtensionTypesEnum.zip))
+                {
+                    fileObject.Stream.Decompress();
+                    SaveToCache(fileObject);
+                }
+            }
+
+            switch (fileObject.FileDataType)
+            {
+                case FileDataTypesEnum.unknown:
+                    {
+                        if (fileObject.FileType.Equals(FileTypesEnum.any))
+                        {
+                            SaveToCache(fileObject);
+                            return new FileObjectCollection();
+                        }
+
+                        Log.Warning("unknown file", fileObject);
+                        break;
+                    }
+                case FileDataTypesEnum.counter:
+                    {
+                        if (fileObject.FileExtensionType.Equals(FileExtensionTypesEnum.blg))
+                        {
+                            return FormatCounterFile(fileObject);
+                        }
+
+                        break;
+                    }
+                case FileDataTypesEnum.data:
+                case FileDataTypesEnum.fabriccrashdumps:
+                    {
+                        if (fileObject.FileExtensionType.Equals(FileExtensionTypesEnum.dmp))
+                        {
+                            return FormatExceptionFile(fileObject);
+                        }
+
+                        SaveToCache(fileObject);
+                        return new FileObjectCollection();
+                    }
+                case FileDataTypesEnum.fabric:
+                case FileDataTypesEnum.lease:
+                    {
+                        if (fileObject.FileExtensionType.Equals(FileExtensionTypesEnum.dtr))
+                        {
+                            return FormatDtrFile(fileObject);
+                        }
+                        else if (fileObject.FileExtensionType.Equals(FileExtensionTypesEnum.etl))
+                        {
+                            return FormatEtlFile(fileObject);
+                        }
+
+                        break;
+                    }
+                case FileDataTypesEnum.bootstrap:
+                case FileDataTypesEnum.fabricsetup:
+                case FileDataTypesEnum.fabricdeployer:
+                    {
+                        if (fileObject.FileExtensionType.Equals(FileExtensionTypesEnum.trace))
+                        {
+                            return FormatSetupFile(fileObject);
+                        }
+
+                        break;
+                    }
+                case FileDataTypesEnum.table:
+                    {
+                        if (fileObject.FileExtensionType.Equals(FileExtensionTypesEnum.csv))
+                        {
+                            return FormatTableFile(fileObject);
+                        }
+
+                        break;
+                    }
+                default:
+                    {
+                        Log.Warning("unsupported file data type", fileObject.FileDataType);
+                        break;
+                    }
+            }
+
+            Log.Warning($"returning: empty fileObjectCollection for file: {fileObject.FileUri}");
+            return new FileObjectCollection();
+        }
+
+        public bool ReadEtl(FileObject fileObject)
+        {
+            bool success = false;
+            int recordsCount = 0;
+            DateTime startTime = DateTime.Now;
+
+            var action = new Action<DtrTraceRecord>((trace) =>
+            {
+                trace.FileType = fileObject.FileDataType.ToString();
+                trace.NodeName = fileObject.NodeName;
+                trace.RelativeUri = fileObject.RelativeUri;
+                fileObject.Stream.Write<DtrTraceRecord>(new List<DtrTraceRecord>(1) { trace }, true);
+                recordsCount++;
+            });
+
+            EtlTraceFileParser<DtrTraceRecord> parser = new EtlTraceFileParser<DtrTraceRecord>(_config);
+            parser.ParseTraces(action, fileObject.FileUri, _config.StartTimeUtc.UtcDateTime, _config.EndTimeUtc.UtcDateTime);
+            
+            _instance.SetMinMaxDate(parser.TraceSessionMetaData.EndTime.Ticks, parser.TraceSessionMetaData.StartTime.Ticks);
+            success = recordsCount != 0;
+            fileObject.Status = success ? FileStatus.succeeded : FileStatus.failed;
+
+            int totalMs = (int)(DateTime.Now - startTime).TotalMilliseconds;
+            Log.Info($"complete:total ms:{totalMs} total records:{recordsCount} records per second:{recordsCount / (totalMs * .001)}", ConsoleColor.Green);
+            return success;
+        }
+
+        public TraceObserver<T> ReadTraceRecords<T>(IObservable<T> source)
+        {
+            DateTime startTime = DateTime.Now;
+            TraceObserver<T> observer = new TraceObserver<T>();
             source.Subscribe(observer);
-            Log.Info($"complete: {observer.Complete}");
+            int records = -1;
+            bool waitResult = false;
+
+            while (!waitResult && observer.Records.Count > records)
+            {
+                records = observer.Records.Count;
+                Log.Debug($"waiting for completion:current record count{records}");
+                waitResult = observer.Completed.Wait(Constants.ThreadSleepMs10000, _fileTasks.CancellationToken);
+            }
+
+            if (!waitResult)
+            {
+                _instance.TotalErrors++;
+                Log.Error($"timed out waiting for observer progress.", source);
+            }
+
+            int totalMs = (int)(DateTime.Now - startTime).TotalMilliseconds;
+            int recordsCount = observer.Records.Count;
+            double recordsPerSecond = recordsCount / (totalMs * .001);
+            Log.Info($"complete:{waitResult} total ms:{totalMs} total records:{recordsCount} records per second:{recordsPerSecond}");
             return observer;
         }
 
-        private bool RelogBlg(FileObject fileObject, string outputFile)
+        public bool RelogBlg(FileObject fileObject, string outputFile)
         {
             bool result = true;
             string csvParams = fileObject.FileUri + " -f csv -o " + outputFile;
@@ -418,11 +510,11 @@ namespace CollectSFData.DataFile
             return result;
         }
 
-        private void SaveToCache(FileObject fileObject, bool force = false)
+        public void SaveToCache(FileObject fileObject, bool force = false)
         {
             try
             {
-                if (force || (!Config.UseMemoryStream & !fileObject.Exists))
+                if (force || (!_config.UseMemoryStream && fileObject.FileUriType == FileUriTypesEnum.fileUri && !fileObject.Exists))
                 {
                     fileObject.Stream.SaveToFile();
                 }
@@ -433,31 +525,32 @@ namespace CollectSFData.DataFile
             }
         }
 
-        private FileObjectCollection SerializeCsv<T>(FileObject fileObject) where T : IRecord
+        public FileObjectCollection SerializeCsv<T>(FileObject fileObject) where T : IRecord
         {
             Log.Debug("enter");
             FileObjectCollection collection = new FileObjectCollection() { fileObject };
             int counter = 0;
 
-            string sourceFile = fileObject.FileUri.ToLower().TrimEnd(CsvExtension.ToCharArray());
-            fileObject.FileUri = $"{sourceFile}{CsvExtension}";
+            string sourceFile = fileObject.FileUri.ToLower().TrimEnd(Constants.CsvExtension.ToCharArray());
+            fileObject.FileUri = $"{sourceFile}{Constants.CsvExtension}";
             List<byte> csvSerializedBytes = new List<byte>();
-            string relativeUri = fileObject.RelativeUri.TrimEnd(CsvExtension.ToCharArray()) + CsvExtension;
+            string relativeUri = fileObject.RelativeUri.TrimEnd(Constants.CsvExtension.ToCharArray()) + Constants.CsvExtension;
 
             foreach (T record in fileObject.Stream.Read<T>())
             {
                 record.RelativeUri = relativeUri;
                 byte[] recordBytes = Encoding.UTF8.GetBytes(record.ToString());
 
-                if (csvSerializedBytes.Count + recordBytes.Length > MaxCsvTransmitBytes)
+                if (csvSerializedBytes.Count + recordBytes.Length > Constants.MaxCsvTransmitBytes)
                 {
-                    record.RelativeUri = relativeUri.TrimEnd(CsvExtension.ToCharArray()) + $".{counter}{CsvExtension}";
+                    record.RelativeUri = relativeUri.TrimEnd(Constants.CsvExtension.ToCharArray()) + $".{counter}{Constants.CsvExtension}";
                     recordBytes = Encoding.UTF8.GetBytes(record.ToString());
 
                     fileObject.Stream.Set(csvSerializedBytes.ToArray());
                     csvSerializedBytes.Clear();
 
-                    fileObject = new FileObject(record.RelativeUri, fileObject.BaseUri);
+                    fileObject = new FileObject(record.RelativeUri, fileObject.BaseUri) { Status = FileStatus.formatting };
+                    _instance.FileObjects.Add(fileObject);
 
                     Log.Debug($"csv serialized size: {csvSerializedBytes.Count} file: {fileObject.FileUri}");
                     collection.Add(fileObject);
@@ -472,17 +565,18 @@ namespace CollectSFData.DataFile
             return collection;
         }
 
-        private FileObjectCollection SerializeJson<T>(FileObject fileObject) where T : IRecord
+        public FileObjectCollection SerializeJson<T>(FileObject fileObject) where T : IRecord
         {
             Log.Debug("enter");
-            string sourceFile = fileObject.FileUri.ToLower().TrimEnd(JsonExtension.ToCharArray());
-            fileObject.FileUri = $"{sourceFile}{JsonExtension}";
+            string sourceFile = fileObject.FileUri.ToLower().TrimEnd(Constants.JsonExtension.ToCharArray());
+            fileObject.FileUri = $"{sourceFile}{Constants.JsonExtension}";
             FileObjectCollection collection = new FileObjectCollection();
-            string relativeUri = fileObject.RelativeUri.TrimEnd(JsonExtension.ToCharArray()) + JsonExtension;
+            string relativeUri = fileObject.RelativeUri.TrimEnd(Constants.JsonExtension.ToCharArray()) + Constants.JsonExtension;
 
-            if (fileObject.Length > MaxJsonTransmitBytes)
+            if (fileObject.Length > Constants.MaxJsonTransmitBytes)
             {
-                FileObject newFileObject = new FileObject($"{sourceFile}", fileObject.BaseUri);
+                FileObject newFileObject = new FileObject($"{sourceFile}", fileObject.BaseUri) { Status = FileStatus.formatting };
+                _instance.FileObjects.Add(newFileObject);
                 int counter = 0;
 
                 foreach (T record in fileObject.Stream.Read<T>())
@@ -490,19 +584,21 @@ namespace CollectSFData.DataFile
                     record.RelativeUri = relativeUri;
                     counter++;
 
-                    if (newFileObject.Length < WarningJsonTransmitBytes)
+                    if (newFileObject.Length < Constants.WarningJsonTransmitBytes)
                     {
-                        newFileObject.Stream.Write<T>(new List<T> { record }, true);
+                        newFileObject.Stream.Write<T>(new List<T>(1) { record }, true);
                     }
                     else
                     {
                         collection.Add(newFileObject);
-                        record.RelativeUri = relativeUri.TrimEnd(JsonExtension.ToCharArray()) + $".{counter}{JsonExtension}";
-                        newFileObject = new FileObject(record.RelativeUri, fileObject.BaseUri);
+                        record.RelativeUri = relativeUri.TrimEnd(Constants.JsonExtension.ToCharArray()) + $".{counter}{Constants.JsonExtension}";
+                        newFileObject = new FileObject(record.RelativeUri, fileObject.BaseUri) { Status = FileStatus.formatting };
+                        _instance.FileObjects.Add(newFileObject);
                     }
                 }
 
-                newFileObject.FileUri = $"{sourceFile}.{counter}{JsonExtension}";
+                _instance.FileObjects.Remove(fileObject);
+                newFileObject.FileUri = $"{sourceFile}.{counter}{Constants.JsonExtension}";
                 collection.Add(newFileObject);
             }
             else
@@ -514,7 +610,7 @@ namespace CollectSFData.DataFile
             return collection;
         }
 
-        private bool TxBlg(FileObject fileObject, string outputFile)
+        public bool TxBlg(FileObject fileObject, string outputFile)
         {
             // this forces blg output timestamps to use local capture timezone which is utc for azure
             // Tx module is not able to determine with PDH api blg source timezone
@@ -522,7 +618,7 @@ namespace CollectSFData.DataFile
 
             DateTime startTime = DateTime.Now;
             IObservable<PerformanceSample> observable = default(IObservable<PerformanceSample>);
-            PerfCounterObserver<PerformanceSample> counterSession = default(PerfCounterObserver<PerformanceSample>);
+            TraceObserver<PerformanceSample> counterSession = default(TraceObserver<PerformanceSample>);
             List<PerformanceSample> records = new List<PerformanceSample>();
             List<CsvCounterRecord> csvRecords = new List<CsvCounterRecord>();
 
@@ -533,13 +629,13 @@ namespace CollectSFData.DataFile
                 observable = PerfCounterObservable.FromFile(fileObject.FileUri);
 
                 Log.Debug($"observable created: {fileObject.FileUri}");
-                counterSession = ReadCounterRecords(observable);
+                counterSession = ReadTraceRecords(observable);
 
                 Log.Debug($"finished total ms: {DateTime.Now.Subtract(startTime).TotalMilliseconds} reading: {fileObject.FileUri}");
                 records = counterSession.Records;
             }
 
-            foreach (var record in records)
+            foreach (PerformanceSample record in records)
             {
                 if (!string.IsNullOrEmpty(record.Value.ToString()))
                 {
@@ -573,6 +669,71 @@ namespace CollectSFData.DataFile
 
             fileObject.Stream.Write(csvRecords);
             Log.Info($"records: {records.Count()} {csvRecords.Count}");
+            return true;
+        }
+
+        public bool TxEtl(FileObject fileObject, string outputFile)
+        {
+            // this forces blg output timestamps to use local capture timezone which is utc for azure
+            // Tx module is not able to determine with PDH api blg source timezone
+            // todo: verify if needed for etl...
+            //TimeUtil.DateTimeKind = DateTimeKind.Unspecified;
+
+            DateTime startTime = DateTime.Now;
+            IObservable<EtwNativeEvent> observable = default(IObservable<EtwNativeEvent>);
+            TraceObserver<EtwNativeEvent> traceSession = default(TraceObserver<EtwNativeEvent>);
+            //List<EtwNativeEvent> records = new List<EtwNativeEvent>();
+            List<DtrTraceRecord> csvRecords = new List<DtrTraceRecord>();
+
+            // todo: verify if needed for etl...testing pdh found invalid data when using concurrently
+            // lock (_lockObj)
+            // {
+            Log.Debug($"observable creating: {fileObject.FileUri}");
+            observable = EtwObservable.FromFiles(fileObject.FileUri);
+
+            Log.Debug($"observable created: {fileObject.FileUri}");
+            traceSession = ReadTraceRecords(observable);
+            Log.Debug($"finished total ms: {DateTime.Now.Subtract(startTime).TotalMilliseconds} reading: {fileObject.FileUri}");
+            //    records = traceSession.Records;
+            // }
+
+            //foreach (EtwNativeEvent record in records)
+            foreach (EtwNativeEvent record in traceSession.Records)
+            {
+                //Log.Info("record", record);
+                //if (!string.IsNullOrEmpty(record.Value.ToString()))
+                //{
+                //    string counterValue = record.Value.ToString() == "NaN" ? "0" : record.Value.ToString();
+
+                //    try
+                //    {
+                //        csvRecords.Add(new CsvCounterRecord()
+                //        {
+                //            Timestamp = record.Timestamp,
+                //            CounterName = record.CounterPath.Replace("\"", "").Trim(),
+                //            CounterValue = Decimal.Parse(counterValue, NumberStyles.AllowExponent | NumberStyles.AllowDecimalPoint),
+                //            Object = record.CounterSet?.Replace("\"", "").Trim(),
+                //            Counter = record.CounterName.Replace("\"", "").Trim(),
+                //            Instance = record.Instance?.Replace("\"", "").Trim(),
+                //            NodeName = fileObject.NodeName,
+                //            FileType = fileObject.FileDataType.ToString(),
+                //            RelativeUri = fileObject.RelativeUri
+                //        });
+                //    }
+                //    catch (Exception ex)
+                //    {
+                //        Log.Exception($"stringValue:{counterValue} exception:{ex}", record);
+                //    }
+                //}
+                //else
+                //{
+                //    Log.Warning($"empty counter value:", record);
+                //}
+            }
+
+            fileObject.Stream.Write(csvRecords);
+            Log.Info($"records: {traceSession.Records.Count()} {csvRecords.Count}");
+            traceSession.Dispose();
             return true;
         }
     }
