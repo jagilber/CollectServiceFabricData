@@ -1,0 +1,63 @@
+﻿@page "/edit/configuration/{KustoTableName}"
+
+@inject HttpClient _httpClient
+@inject NavigationManager _navigationManager
+
+@if (_config == null)
+{
+    <p>Could not find trace configuration with name: <span>@KustoTableName</span>.json.</p>
+}
+else
+{
+    <ConfigureForm config="_config" GatherTypes="@_gatherTypes"
+                    IsAdd="false"
+                    CancelRequest="Cancel"
+                    ValidationResult="@(async (success) => await ValidationResultAsync(success))" />    
+}
+
+@if (_error)
+{
+    <br />
+    <div class="alert alert-danger">Failed to update the trace configuration (@_errorMessage).</div>
+}
+
+@code {
+    [Parameter]
+    public string KustoTableName { get; set; }
+
+    private ConfigurationProperties _config;
+    private bool _error;
+    private string _errorMessage;
+    private List<string> _gatherTypes;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Pre-fetch the gather types list converting the enum
+        _gatherTypes = Enum.GetNames(typeof(CollectSFData.DataFile.FileTypesEnum)).ToList();
+
+        // Pull the json configuration
+        _config = await _httpClient.GetFromJsonAsync<ConfigurationProperties>($"api/configuration/pull/{KustoTableName}");
+    }
+
+    private void Cancel()
+    {
+        _httpClient.CancelPendingRequests();
+    }
+
+    private async Task ValidationResultAsync(bool success)
+    {
+
+    }
+
+    private async Task SubmitForm()
+    {
+        // REST operation to post the configuration option
+        var response = await _httpClient.PostAsJsonAsync("api/configuration/save", _config);
+
+        if (response.IsSuccessStatusCode)
+        {
+            _navigationManager.NavigateTo("/grid-config");
+        }
+    }
+
+}

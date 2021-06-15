@@ -1,0 +1,77 @@
+﻿@page "/grid-config"
+
+@inject HttpClient _httpClient
+@inject NavigationManager _navigationManager
+
+<h3>GridConfiguration</h3>
+
+@if (_configOptions == null)
+{
+    <p><em>Loading...</em></p>
+}
+else
+{
+    <RadzenContent>
+        <RadzenGrid Data="@_configOptions" TItem="ConfigurationProperties"
+                    AllowSorting="true" AllowPaging="true" PageSize="5"
+                    AllowFiltering="true" AllowColumnResize="true"
+                    RowSelect="@GridRowSelect">
+            <Columns>
+                <RadzenGridColumn TItem="ConfigurationProperties" Property="KustoTable" Title="Table" />
+                <RadzenGridColumn TItem="ConfigurationProperties" Property="GatherType" Title="GatherType" />
+                <RadzenGridColumn TItem="ConfigurationProperties" Property="StartTimeUtc" Title="Start" />
+                <RadzenGridColumn TItem="ConfigurationProperties" Property="EndTimeUtc" Title="End" />
+                <RadzenGridColumn TItem="ConfigurationProperties" Context="configContext" 
+                                  Bubble="false" Filterable="false" Sortable="false" Width="30pt">
+                    <Template Context="configContext">
+                        <RadzenButton ButtonStyle="ButtonStyle.Danger" Icon="close" Size="ButtonSize.Small"
+                                      @onclick:stopPropagation="true" Click="@(args => GridDeleteButtonClick(configContext.KustoTable))" />
+                    </Template>
+                </RadzenGridColumn>
+            </Columns>
+        </RadzenGrid>
+    </RadzenContent>
+}
+
+
+@code {
+    private IEnumerable<ConfigurationProperties> _configOptions;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (_configOptions == null)
+        {
+            await ReloadConfiguration();
+        }
+    }
+
+    private async Task ReloadConfiguration()
+    {
+        var result = await _httpClient.GetAsync("/api/allconfiguration");
+        if (result.IsSuccessStatusCode)
+        {
+            _configOptions = await result.Content.ReadFromJsonAsync<IEnumerable<ConfigurationProperties>>();
+        }
+    }
+
+    protected Task GridRowSelect(ConfigurationProperties configurationProperties)
+    {
+        _navigationManager.NavigateTo($"/edit/configuration/{configurationProperties.KustoTable}");
+        
+        return Task.CompletedTask;
+    }
+
+    protected async Task GridDeleteButtonClick(string kustoTable)
+    {
+        var deleteResponse = await _httpClient.DeleteAsync($"/api/configuration/{kustoTable}");
+        if(deleteResponse.IsSuccessStatusCode)
+        {
+            var result = await deleteResponse.Content.ReadAsStringAsync();
+            if(result.Equals("true", StringComparison.InvariantCultureIgnoreCase))
+            {
+                await ReloadConfiguration();
+            }
+        }
+    }
+
+}

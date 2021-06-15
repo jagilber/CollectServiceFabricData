@@ -1,0 +1,57 @@
+﻿@page "/add/configuration"
+
+@using CollectSFDataGui.Shared
+
+@inject HttpClient _httpClient
+@inject NavigationManager _navigationManager
+
+@if (_config == null)
+{
+    <p><em>Loading...</em></p>
+}
+else
+{
+    <ConfigureForm config="_config" GatherTypes="@_gatherTypes"
+                    IsAdd="true"
+                    CancelRequest="Cancel"
+                    ValidationResult="@(async (success) => await ValidationResultAsync(success))" />
+}
+
+@code {
+    private List<string> _gatherTypes;
+    private ConfigurationProperties _config;
+    private string _tableName;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _gatherTypes = Enum.GetNames(typeof(CollectSFData.DataFile.FileTypesEnum)).ToList();
+        await GetCurrentConfig();
+    }
+
+    private async Task GetCurrentConfig()
+    {
+        _config = await _httpClient.GetFromJsonAsync<ConfigurationProperties>("api/configurationJson", JsonHelpers.GetJsonSerializerOptions());
+        _tableName = _config.KustoTable;
+    }
+
+    private void Cancel()
+    {
+        _httpClient.CancelPendingRequests();
+    }
+
+    private async Task ValidationResultAsync(bool success)
+    {
+
+    }
+
+    private async Task SubmitForm()
+    {
+        // REST operation to post the configuration option
+        var response = await _httpClient.PostAsJsonAsync("api/configuration/save", _config);
+
+        if (response.IsSuccessStatusCode)
+        {
+            _navigationManager.NavigateTo("/grid-config");
+        }
+    }
+}
