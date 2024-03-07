@@ -1,5 +1,9 @@
 # Change log
 
+## 03/07/2024
+
+- update github action labeler to use new version of actions/labeler@v5
+
 ## 11/19/2023
 
 - add support for .net8.0
