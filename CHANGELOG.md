@@ -1,5 +1,13 @@
 # Change log
 
+## 03/12/2024
+
+- update git actions workflow release. add permissions
+    permissions:
+      contents: read
+      packages: write
+      actions: write
+
 ## 03/11/2024
 
 - update kusto quickstart doc with modified image and minimum sas permissions
