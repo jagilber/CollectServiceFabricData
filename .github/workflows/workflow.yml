@@ -2,10 +2,10 @@ name: CI CollectSFData
 
 env:
   project_name: CollectSFData
-  project_root: '${{ github.workspace }}\src'
-  artifacts_path: '${{ github.workspace }}\src\bin\artifacts'
-  release_path: '${{ github.workspace }}\src\bin\Release'
-  release_config: '.\configurationFiles\collectsfdata.options.json'
+  project_root: "${{ github.workspace }}\\src"
+  artifacts_path: "${{ github.workspace }}\\src\\bin\\artifacts"
+  release_path: "${{ github.workspace }}\\src\\bin\\Release"
+  release_config: ".\\configurationFiles\\collectsfdata.options.json"
   target_version: net48
   github_owner: ${{ github.event.repository.owner.name }}
 
@@ -119,7 +119,7 @@ jobs:
         shell: powershell
         id: prepare_release_asset
         run: |
-          $release_upload = "$($env:release_path.trim())_upload"
+          $release_upload = "$($env:release_path.trim())Upload"
           md $release_upload
           $releaseFramework = "$($env:release_path)\$($env:target_version)"
           copy "$($releaseFramework)\*.config" $release_upload
