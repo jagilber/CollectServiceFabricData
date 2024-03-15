@@ -126,8 +126,13 @@ jobs:
           copy "$($releaseFramework)\*.exe" $release_upload
           copy "$($releaseFramework)\*.dll" $release_upload
           copy "$($releaseFramework)\*.json" $release_upload
-          write-host "compress-archive -path "$($release_upload.trim())\*" -destinationPath "$($release_upload)\$($env:project_name).zip" -force"
-          compress-archive -path "$($release_upload.trim())\*" -destinationPath "$($release_upload)\$($env:project_name).zip" -force
+          write-host "release_upload='$release_upload'"
+          write-host "release_upload trim='$($release_upload.trim())'"
+          write-host "release_upload length='$($release_upload.length)'"
+          $source = "$($release_upload.trim())\\*".replace(' ', '')
+          write-host "source='$source'"
+          write-host "compress-archive -path $source -destinationPath "$($release_upload)\$($env:project_name).zip" -force"
+          compress-archive -path $source -destinationPath "$($release_upload)\$($env:project_name).zip" -force
           $fileVersion = [io.fileinfo]::new("$($releaseFramework)\$($env:project_name).exe").VersionInfo.FileVersion
           echo "::log-command parameter1=$fileVersion::fileVersion"
           echo "file_version=v$fileVersion" >> $env:GITHUB_OUTPUT
