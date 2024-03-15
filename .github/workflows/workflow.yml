@@ -3,8 +3,8 @@ name: CI CollectSFData
 env:
   project_name: CollectSFData
   project_root: ${{ github.workspace }}\src
-  artifacts_path: ${{ github.env.project_root }}\bin\artifacts
-  release_path: ${{ github.env.project_root }}\bin\Release
+  artifacts_path: ${{ github.workspace }}\src\bin\artifacts
+  release_path: ${{ github.workspace }}\src\bin\Release
   release_config: .\configurationFiles\collectsfdata.options.json
   target_version: net48
   github_owner: ${{ github.event.repository.owner.name }}
