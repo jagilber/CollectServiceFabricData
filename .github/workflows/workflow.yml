@@ -131,8 +131,8 @@ jobs:
           write-host "release_upload length='$($release_upload.length)'"
           $source = "$($release_upload.trim())\\*".replace(' ', '')
           write-host "source='$source'"
-          write-host "compress-archive -path $source -destinationPath "$($release_upload)\$($env:project_name).zip" -force"
-          compress-archive -path $source -destinationPath "$($release_upload)\$($env:project_name).zip" -force
+          write-host "compress-archive -path $source -destinationPath "$source\\$($env:project_name).zip" -force"
+          compress-archive -path $source -destinationPath "$source\\$($env:project_name).zip" -force
           $fileVersion = [io.fileinfo]::new("$($releaseFramework)\$($env:project_name).exe").VersionInfo.FileVersion
           echo "::log-command parameter1=$fileVersion::fileVersion"
           echo "file_version=v$fileVersion" >> $env:GITHUB_OUTPUT
@@ -158,7 +158,9 @@ jobs:
         id: create_release
         uses: softprops/action-gh-release@v1
         with:
-          files: ${{ env.release_path }}\${{ env.project_name }}.zip
+          files: |
+            **/${{ env.project_name }}.zip
+            **/${{ env.project_name }}*.nupkg
           tag_name: ${{ steps.prepare_release_asset.outputs.file_version }}
           name: ${{ env.project_name }}
           draft: false
