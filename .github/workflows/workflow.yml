@@ -86,6 +86,10 @@ jobs:
     if: success() && github.event.pull_request.merged == true && github.event.action == 'closed' && (contains(github.event.pull_request.labels.*.name, 'Release') || contains(github.event.pull_request.labels.*.name, 'Pre-release'))
     needs: build
     runs-on: windows-latest
+    permissions:
+      contents: read
+      packages: write
+      actions: write
     steps:
       - name: checkout
         uses: actions/checkout@v1
