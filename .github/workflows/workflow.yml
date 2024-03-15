@@ -2,7 +2,7 @@ name: CI CollectSFData
 
 env:
   project_name: CollectSFData
-  project_root: $(GITHUB_WORKSPACE)\src
+  project_root: ${{github.workspace}}\src
   artifacts_path: $(project_root)\bin\artifacts
   release_path: $(project_root)\bin\Release
   release_config: .\configurationFiles\collectsfdata.options.json
