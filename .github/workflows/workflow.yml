@@ -83,7 +83,7 @@ jobs:
     needs: build
     runs-on: windows-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
       actions: write
     steps:
@@ -128,7 +128,6 @@ jobs:
           copy "$($releaseFramework)\*.json" $release_upload
           $source = "$($release_upload.trim())\\*".replace(' ', '')
           $destination = "$($release_upload.trim())\\$($env:project_name).zip".replace(' ', '')
-          write-host "source='$source'"
           write-host "compress-archive -path $source -destinationPath $destination -force"
           compress-archive -path $source -destinationPath $destination -force
           $fileVersion = [io.fileinfo]::new("$($releaseFramework)\$($env:project_name).exe").VersionInfo.FileVersion
@@ -158,7 +157,7 @@ jobs:
         with:
           files: |
             **/${{ env.project_name }}.zip
-            **/${{ env.project_name }}*.nupkg
+            **/*${{ env.project_name }}*.nupkg
           tag_name: ${{ steps.prepare_release_asset.outputs.file_version }}
           name: ${{ env.project_name }}
           draft: false
