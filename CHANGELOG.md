@@ -4,7 +4,7 @@
 
 - update git actions workflow release. add permissions
     permissions:
-      contents: read
+      contents: write
       packages: write
       actions: write
 

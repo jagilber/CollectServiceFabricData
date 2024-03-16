@@ -127,7 +127,7 @@ jobs:
           copy "$($releaseFramework)\*.dll" $release_upload
           copy "$($releaseFramework)\*.json" $release_upload
           $source = "$($release_upload.trim())\\*".replace(' ', '')
-          $destination = "$($release_path.trim())\\$($env:project_name).zip".replace(' ', '')
+          $destination = "$($env:release_path.trim())\\$($env:project_name).zip".replace(' ', '')
           write-host "compress-archive -path $source -destinationPath $destination -force"
           compress-archive -path $source -destinationPath $destination -force
           $fileVersion = [io.fileinfo]::new("$($releaseFramework)\$($env:project_name).exe").VersionInfo.FileVersion
