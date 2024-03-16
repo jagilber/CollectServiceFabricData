@@ -6,7 +6,6 @@
     permissions:
       contents: write
       packages: write
-      actions: write
 
 ## 03/11/2024
 
