@@ -1,6 +1,6 @@
 # Change log
 
-## 03/16/2024
+## 03/16/2024.1
 
 - update git actions workflow release. add permissions
     permissions:
