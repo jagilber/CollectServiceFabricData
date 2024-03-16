@@ -85,7 +85,7 @@ jobs:
     permissions:
       contents: write
       packages: write
-      actions: write
+      #actions: write
     steps:
       - name: checkout
         uses: actions/checkout@v1
@@ -137,33 +137,36 @@ jobs:
           dir $releaseFramework -recurse
           write-host "dir $release_upload -recurse"
           dir $release_upload -recurse
+          write-host "dir $env:release_path -recurse"
+          dir $env:release_path.trim() -recurse
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # - name: create release
-      #   id: create_release
-      #   uses: actions/create-release@v1
-      #   env:
-      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      #   with:
-      #     tag_name: ${{ steps.prepare_release_asset.outputs.file_version }}
-      #     release_name: ${{ env.project_name }}
-      #     draft: false
-      #     prerelease: ${{ contains(github.event.pull_request.labels.*.name, 'Pre-release') }}
-      # https://github.com/marketplace/actions/gh-release
       - name: create release
         id: create_release
-        uses: softprops/action-gh-release@v1
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          files: |
-            **/${{ env.project_name }}.zip
-            **/*${{ env.project_name }}*.nupkg
           tag_name: ${{ steps.prepare_release_asset.outputs.file_version }}
-          name: ${{ env.project_name }}
+          release_name: ${{ env.project_name }}
           draft: false
-          token: ${{ secrets.GITHUB_TOKEN }}
           prerelease: ${{ contains(github.event.pull_request.labels.*.name, 'Pre-release') }}
-          generate_release_notes: true
+
+      # https://github.com/marketplace/actions/gh-release
+      # - name: create release
+      #   id: create_release
+      #   uses: softprops/action-gh-release@v1
+      #   with:
+      #     files: |
+      #       **/${{ env.project_name }}.zip
+      #       **/*${{ env.project_name }}*.nupkg
+      #     tag_name: ${{ steps.prepare_release_asset.outputs.file_version }}
+      #     name: ${{ env.project_name }}
+      #     draft: false
+      #     token: ${{ secrets.GITHUB_TOKEN }}
+      #     prerelease: ${{ contains(github.event.pull_request.labels.*.name, 'Pre-release') }}
+      #     generate_release_notes: true
 
       - name: upload release asset
         id: upload-release-asset
