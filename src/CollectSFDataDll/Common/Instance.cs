@@ -28,6 +28,9 @@ namespace CollectSFData.Common
         public int TotalFilesMatched { get; set; }
         public int TotalFilesSkipped { get; set; }
         public int TotalRecords { get; set; }
+        public bool HasDiscoveredTimeRange => DiscoveredMinDateTicks != DateTime.MaxValue.Ticks
+            && DiscoveredMaxDateTicks != DateTime.MinValue.Ticks
+            && DiscoveredMinDateTicks <= DiscoveredMaxDateTicks;
         protected internal ConfigurationOptions Config { get; private set; } = ConfigurationOptions.Singleton();
         protected internal CustomTaskManager TaskManager { get; private set; }
 
@@ -55,6 +58,7 @@ namespace CollectSFData.Common
                 Config.Validate();
             }
 
+            Log.LogErrors = 0;
             Log.Open();
             DiscoveredMaxDateTicks = DateTime.MinValue.Ticks;
             DiscoveredMinDateTicks = DateTime.MaxValue.Ticks;
@@ -100,8 +104,8 @@ namespace CollectSFData.Common
 
         public void SetMinMaxDate(long minDateTicks, long maxDateTicks)
         {
-            SetMaxDate(minDateTicks);
-            SetMinDate(maxDateTicks);
+            SetMinDate(minDateTicks);
+            SetMaxDate(maxDateTicks);
         }
 
         public Total Totals()

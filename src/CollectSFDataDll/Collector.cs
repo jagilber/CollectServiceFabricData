@@ -284,7 +284,7 @@ namespace CollectSFData
 
             if (Instance.TotalFilesEnumerated > 0)
             {
-                if (Config.FileType != FileTypesEnum.table)
+                if (Config.FileType != FileTypesEnum.table && Instance.HasDiscoveredTimeRange)
                 {
                     DateTime discoveredMinDateTime = new DateTime(Instance.DiscoveredMinDateTicks);
                     DateTime discoveredMaxDateTime = new DateTime(Instance.DiscoveredMaxDateTicks);
@@ -295,6 +295,10 @@ namespace CollectSFData
                     {
                         Log.Last($"error: configured time range not within discovered time range. configured time range: {Config.StartTimeUtc} - {Config.EndTimeUtc}", ConsoleColor.Red);
                     }
+                }
+                else if (Config.FileType != FileTypesEnum.table)
+                {
+                    Log.Last("discovered time range unavailable: no valid file timestamps were read.", ConsoleColor.Yellow);
                 }
 
                 if (Instance.TotalFilesMatched + Instance.TotalRecords == 0

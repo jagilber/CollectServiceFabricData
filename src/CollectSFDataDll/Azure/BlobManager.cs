@@ -93,13 +93,16 @@ namespace CollectSFData.Azure
             {
                 Log.Debug($"enter: {blobUri}");
                 Uri uri = new Uri(blobUri);
-                string query = "";
                 if (string.IsNullOrEmpty(uri.Query))
                 {
                     Log.Debug($"adding sas token to uri: {blobUri}");
-                    query = _config.SasEndpointInfo.SasToken;
+                    UriBuilder uriBuilder = new UriBuilder(uri)
+                    {
+                        Query = _config.SasEndpointInfo.SasToken.TrimStart('?')
+                    };
+                    uri = uriBuilder.Uri;
                 }
-                return CreateBlobClient(uri, query);
+                return CreateBlobClient(uri);
             }
             catch (Exception e)
             {
@@ -452,13 +455,13 @@ namespace CollectSFData.Azure
                 if (Regex.IsMatch(blobClient.Uri.ToString(), _fileFilterPattern, RegexOptions.IgnoreCase))
                 {
                     long ticks = Convert.ToInt64(Regex.Match(blobClient.Uri.ToString(), _fileFilterPattern, RegexOptions.IgnoreCase).Groups[1].Value);
+                    _instance.SetMinMaxDate(ticks);
 
                     if (ticks < _config.StartTimeUtc.Ticks | ticks > _config.EndTimeUtc.Ticks)
                     {
                         _instance.TotalFilesSkipped++;
                         Log.Debug($"exclude:bloburi file ticks {new DateTime(ticks).ToString("o")} outside of time range:{blobClient.Uri}");
 
-                        _instance.SetMinMaxDate(ticks);
                         continue;
                     }
                     else
